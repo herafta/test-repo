@@ -1,0 +1,16 @@
+[Unit]
+Description=Saiyan OCC Trading Bot
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/saiyan-bot/test-repo
+# Path to the python executable INSIDE your virtual environment
+ExecStart=/home/ubuntu/saiyan-bot/venv/bin/python3 server.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/ubuntu/saiyan-bot/test-repo/bot.log
+StandardError=append:/home/ubuntu/saiyan-bot/test-repo/bot.log
+
+[Install]
+WantedBy=multi-user.target
