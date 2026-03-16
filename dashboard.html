@@ -1101,6 +1101,16 @@ input:checked + .slider::before { transform: translateX(20px); background: var(-
         <button class="btn btn-primary" style="margin-top:8px;" onclick="saveApiKeys()">Apply API Keys</button>
       </div>
 
+      <div class="card" style="border-color: rgba(255,51,102,0.4);">
+        <div class="section-title" style="color: var(--red);">🚨 Danger Zone</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px;">
+          Completely wipe the SQLite database, erasing all trade history, equity tracking, and bot memory. This action cannot be undone.
+        </div>
+        <button onclick="factoryResetBot()" style="background: rgba(255,51,102,0.1); color: var(--red); padding: 10px 16px; border: 1px solid var(--red); border-radius: 4px; cursor: pointer; font-family: var(--font-ui); font-weight: 700; letter-spacing: 1px; width: 100%; transition: all 0.2s;">
+          ⚠ FACTORY RESET DATABASE
+        </button>
+      </div>
+
     </div>
   </div>
 
@@ -1731,6 +1741,30 @@ function refreshConfig() {
   fetch('/api/config').then(r => r.json()).then(cfg => {
     // already handled via SSE
   });
+}
+
+function factoryResetBot() {
+  const firstConfirm = confirm("WARNING: You are about to delete all trade history, equity tracking, and reset the database to zero. This cannot be undone.\n\nAre you absolutely sure?");
+  
+  if (firstConfirm) {
+    const password = prompt("SECURITY AUTHORIZATION: Enter the password to confirm the database wipe:");
+    
+    if (password === "45457506") {
+      fetch('/api/reset_data', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+          if (data.status === "success") {
+            alert("Bot data has been successfully wiped. Starting fresh.");
+            location.reload(); 
+          } else {
+            alert("Error wiping data: " + data.error);
+          }
+        })
+        .catch(err => alert("Network error: " + err));
+    } else if (password !== null) {
+      alert("Reset aborted: Incorrect password.");
+    }
+  }
 }
 
 // ════════════════════════════════════════════
