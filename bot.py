@@ -1693,6 +1693,28 @@ class SaiyanBot:
             price = self.data_provider.get_price(trade.symbol)
         self.trade_manager.force_close(trade_id, price)
 
+    def reset_data(self):
+        with self._lock:
+            self.trade_manager.open_trades.clear()
+            self.trade_manager.closed_trades.clear()
+            self.equity_curve.clear()
+            self.trade_manager._trade_counter = 0
+            
+            if self.config.paper_mode:
+                self.exchange.balance_usdt = self.exchange.initial_balance
+            
+            try:
+                import sqlite3
+                con = sqlite3.connect("saiyan_bot.db", timeout=10)
+                cur = con.cursor()
+                cur.execute("DELETE FROM trades")
+                cur.execute("DELETE FROM equity_curve")
+                con.commit()
+                con.close()
+                log.info("Database and in-memory data have been completely reset.")
+            except Exception as e:
+                log.error(f"Failed to reset database: {e}")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # GLOBAL BOT INSTANCE
