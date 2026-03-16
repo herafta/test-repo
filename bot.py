@@ -200,7 +200,7 @@ class BotConfig:
     tp1_pct: float = 1.0
     tp2_pct: float = 1.5
     tp3_pct: float = 2.0
-    sl_pct:  float = 50.0
+    sl_pct:  float = 1.5
     tp1_qty: float = 50.0
     tp2_qty: float = 30.0
     tp3_qty: float = 20.0
@@ -1258,42 +1258,42 @@ REGIME_PARAMS = {
     "TRENDING_BULLISH": {
         "trade_direction": "LONG",
         "tp1_pct": 1.2, "tp2_pct": 2.0, "tp3_pct": 3.0,
-        "sl_pct": 0.6, "tp1_qty": 40.0, "tp2_qty": 30.0, "tp3_qty": 30.0,
+        "sl_pct": 1.5, "tp1_qty": 40.0, "tp2_qty": 30.0, "tp3_qty": 30.0,
         "description": "Strong uptrend — run profits, tight SL, longs only.",
         "fits": ["Trend following", "Breakout buying", "Momentum long"],
     },
     "TRENDING_BEARISH": {
         "trade_direction": "SHORT",
         "tp1_pct": 1.2, "tp2_pct": 2.0, "tp3_pct": 3.0,
-        "sl_pct": 0.6, "tp1_qty": 40.0, "tp2_qty": 30.0, "tp3_qty": 30.0,
+        "sl_pct": 1.5, "tp1_qty": 40.0, "tp2_qty": 30.0, "tp3_qty": 30.0,
         "description": "Strong downtrend — run profits, tight SL, shorts only.",
         "fits": ["Trend following short", "Breakdown selling", "Momentum short"],
     },
     "SIDEWAYS": {
         "trade_direction": "BOTH",
         "tp1_pct": 0.7, "tp2_pct": 1.0, "tp3_pct": 1.3,
-        "sl_pct": 0.4, "tp1_qty": 60.0, "tp2_qty": 25.0, "tp3_qty": 15.0,
+        "sl_pct": 1.2, "tp1_qty": 60.0, "tp2_qty": 25.0, "tp3_qty": 15.0,
         "description": "Range-bound market — take quick profits, both sides.",
         "fits": ["Range trading", "Mean reversion", "Scalping"],
     },
     "MEAN_REVERSION": {
         "trade_direction": "BOTH",
         "tp1_pct": 0.6, "tp2_pct": 0.9, "tp3_pct": 1.2,
-        "sl_pct": 50.0, "tp1_qty": 65.0, "tp2_qty": 25.0, "tp3_qty": 10.0,
+        "sl_pct": 1.2, "tp1_qty": 65.0, "tp2_qty": 25.0, "tp3_qty": 10.0,
         "description": "Low volatility — quick scalps, tight targets, both sides.",
         "fits": ["Mean reversion scalping", "Fading extremes"],
     },
     "HIGH_VOLATILITY": {
         "trade_direction": "BOTH",
         "tp1_pct": 1.5, "tp2_pct": 2.5, "tp3_pct": 4.0,
-        "sl_pct": 0.8, "tp1_qty": 40.0, "tp2_qty": 35.0, "tp3_qty": 25.0,
+        "sl_pct": 2.5, "tp1_qty": 40.0, "tp2_qty": 35.0, "tp3_qty": 25.0,
         "description": "High vol — wider targets and SL, quick partial exits.",
         "fits": ["Breakout trading", "Momentum scalping", "News plays"],
     },
     "DETECTING": {
         "trade_direction": "BOTH",
         "tp1_pct": 1.0, "tp2_pct": 1.5, "tp3_pct": 2.0,
-        "sl_pct": 0.5, "tp1_qty": 50.0, "tp2_qty": 30.0, "tp3_qty": 20.0,
+        "sl_pct": 1.5, "tp1_qty": 50.0, "tp2_qty": 30.0, "tp3_qty": 20.0,
         "description": "Analyzing market conditions — using default parameters.",
         "fits": ["Default balanced parameters"],
     },
