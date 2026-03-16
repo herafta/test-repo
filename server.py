@@ -111,6 +111,15 @@ def regime_params():
     return jsonify(REGIME_PARAMS)
 
 
+@app.route("/api/reset_data", methods=["POST"])
+def reset_data():
+    try:
+        bot.reset_data()
+        return jsonify({"status": "success", "message": "Database and state reset successfully."})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     # Auto-start bot on server launch
     bot.start()
