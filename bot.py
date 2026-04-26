@@ -93,6 +93,7 @@ def db_upsert_trade(trade: "Trade"):
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 qty           = excluded.qty,
+                sl            = excluded.sl,
                 status        = excluded.status,
                 exit_price    = excluded.exit_price,
                 exit_time     = excluded.exit_time,
@@ -1144,8 +1145,9 @@ class TradeManager:
                                             current_price, side)
             trade.realized_pnl += pnl
             trade.qty -= close_qty
+            trade.sl = trade.entry_price
             db_upsert_trade(trade)
-            log.info(f"TP1 hit {trade.symbol} pnl={pnl:.4f}")
+            log.info(f"TP1 hit {trade.symbol} pnl={pnl:.4f} | SL moved to BE")
 
         # TP2
         elif trade.tp1_hit and not trade.tp2_hit and hit_tp(trade.tp2):
@@ -1258,35 +1260,35 @@ REGIME_PARAMS = {
     "TRENDING_BULLISH": {
         "trade_direction": "LONG",
         "tp1_pct": 1.2, "tp2_pct": 2.0, "tp3_pct": 3.0,
-        "sl_pct": 1.5, "tp1_qty": 40.0, "tp2_qty": 30.0, "tp3_qty": 30.0,
+        "sl_pct": 1.5, "tp1_qty": 25.0, "tp2_qty": 25.0, "tp3_qty": 50.0,
         "description": "Strong uptrend — run profits, tight SL, longs only.",
         "fits": ["Trend following", "Breakout buying", "Momentum long"],
     },
     "TRENDING_BEARISH": {
         "trade_direction": "SHORT",
         "tp1_pct": 1.2, "tp2_pct": 2.0, "tp3_pct": 3.0,
-        "sl_pct": 1.5, "tp1_qty": 40.0, "tp2_qty": 30.0, "tp3_qty": 30.0,
+        "sl_pct": 1.5, "tp1_qty": 25.0, "tp2_qty": 25.0, "tp3_qty": 50.0,
         "description": "Strong downtrend — run profits, tight SL, shorts only.",
         "fits": ["Trend following short", "Breakdown selling", "Momentum short"],
     },
     "SIDEWAYS": {
         "trade_direction": "BOTH",
         "tp1_pct": 0.7, "tp2_pct": 1.0, "tp3_pct": 1.3,
-        "sl_pct": 1.2, "tp1_qty": 60.0, "tp2_qty": 25.0, "tp3_qty": 15.0,
+        "sl_pct": 1.2, "tp1_qty": 60.0, "tp2_qty": 30.0, "tp3_qty": 10.0,
         "description": "Range-bound market — take quick profits, both sides.",
         "fits": ["Range trading", "Mean reversion", "Scalping"],
     },
     "MEAN_REVERSION": {
         "trade_direction": "BOTH",
-        "tp1_pct": 0.6, "tp2_pct": 0.9, "tp3_pct": 1.2,
-        "sl_pct": 1.2, "tp1_qty": 65.0, "tp2_qty": 25.0, "tp3_qty": 10.0,
-        "description": "Low volatility — quick scalps, tight targets, both sides.",
+        "tp1_pct": 0.8, "tp2_pct": 1.2, "tp3_pct": 1.6,
+        "sl_pct": 0.8, "tp1_qty": 75.0, "tp2_qty": 20.0, "tp3_qty": 5.0,
+        "description": "Low volatility — 1:1 base RR, heavy front-load, tight SL.",
         "fits": ["Mean reversion scalping", "Fading extremes"],
     },
     "HIGH_VOLATILITY": {
         "trade_direction": "BOTH",
         "tp1_pct": 1.5, "tp2_pct": 2.5, "tp3_pct": 4.0,
-        "sl_pct": 2.5, "tp1_qty": 40.0, "tp2_qty": 35.0, "tp3_qty": 25.0,
+        "sl_pct": 2.5, "tp1_qty": 50.0, "tp2_qty": 30.0, "tp3_qty": 20.0,
         "description": "High vol — wider targets and SL, quick partial exits.",
         "fits": ["Breakout trading", "Momentum scalping", "News plays"],
     },
