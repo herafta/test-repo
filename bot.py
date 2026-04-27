@@ -198,13 +198,13 @@ class BotConfig:
     int_res: int = 16                       # multiplier → 48-min HTF confirmation
 
     # Risk
-    tp1_pct: float = 1.0
-    tp2_pct: float = 1.5
-    tp3_pct: float = 2.0
-    sl_pct:  float = 1.5
-    tp1_qty: float = 50.0
-    tp2_qty: float = 30.0
-    tp3_qty: float = 20.0
+    tp1_pct: float = 0.8
+    tp2_pct: float = 1.2
+    tp3_pct: float = 1.6
+    sl_pct:  float = 0.8
+    tp1_qty: float = 75.0
+    tp2_qty: float = 20.0
+    tp3_qty: float = 5.0
 
     # Position sizing
     equity_pct: float = 10.0
@@ -1185,7 +1185,10 @@ class TradeManager:
             # We store it in a shared dict keyed by symbol
             _BOT_COOLDOWNS[trade.symbol] = _BOT_COOLDOWNS.get(trade.symbol, 0) + 1
             consec = _BOT_COOLDOWNS[trade.symbol]
-            cooldown_secs = min(60 * consec, 600)   # 1m, 2m, … up to 10m
+            
+            # Align cooldown with the strategy timeframe (3 minutes = 180s)
+            base_cooldown = self.config.tf_minutes * 60
+            cooldown_secs = min(base_cooldown * consec, 1800)   # 3m, 6m, 9m … up to 30m
             _BOT_COOLDOWN_UNTIL[trade.symbol] = time.time() + cooldown_secs
             log.info(f"Cooldown {trade.symbol} for {cooldown_secs}s (SL #{consec})")
 
@@ -1294,9 +1297,9 @@ REGIME_PARAMS = {
     },
     "DETECTING": {
         "trade_direction": "BOTH",
-        "tp1_pct": 1.0, "tp2_pct": 1.5, "tp3_pct": 2.0,
-        "sl_pct": 1.5, "tp1_qty": 50.0, "tp2_qty": 30.0, "tp3_qty": 20.0,
-        "description": "Analyzing market conditions — using default parameters.",
+        "tp1_pct": 0.8, "tp2_pct": 1.2, "tp3_pct": 1.6,
+        "sl_pct": 0.8, "tp1_qty": 75.0, "tp2_qty": 20.0, "tp3_qty": 5.0,
+        "description": "Analyzing market conditions — using optimized default parameters.",
         "fits": ["Default balanced parameters"],
     },
 }
