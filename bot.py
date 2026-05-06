@@ -1283,9 +1283,9 @@ REGIME_PARAMS = {
     },
     "MEAN_REVERSION": {
         "trade_direction": "BOTH",
-        "tp1_pct": 0.8, "tp2_pct": 1.2, "tp3_pct": 1.6,
-        "sl_pct": 0.8, "tp1_qty": 75.0, "tp2_qty": 20.0, "tp3_qty": 5.0,
-        "description": "Low volatility — 1:1 base RR, heavy front-load, tight SL.",
+        "tp1_pct": 0.8, "tp2_pct": 1.3, "tp3_pct": 1.8,
+        "sl_pct": 0.5, "tp1_qty": 70.0, "tp2_qty": 20.0, "tp3_qty": 10.0,
+        "description": "Low volatility — 1.6:1 RR at TP1, tighter SL, mean-reversion entries.",
         "fits": ["Mean reversion scalping", "Fading extremes"],
     },
     "HIGH_VOLATILITY": {
@@ -1474,6 +1474,9 @@ class SaiyanBot:
         signal = self.signal_engine.generate_signal(candles)
         if signal == 0:
             return
+        # Deduplicate: don't re-enter on the same crossover that already triggered
+        if state and signal == state.prev_signal:
+            return
 
         # ── RSI confirmation filter ───────────────────────────────────────────
         closes = [c.close for c in candles]
@@ -1491,9 +1494,9 @@ class SaiyanBot:
         ema50 = Indicators.ema(closes, 50)
         ema_val = next((v for v in reversed(ema50) if v), None)
         if ema_val:
-            if signal == 1  and closes[-1] < ema_val * 0.998:  # long below EMA — skip
+            if signal == 1  and closes[-1] > ema_val * 1.005:  # don't long when price is already extended above EMA
                 return
-            if signal == -1 and closes[-1] > ema_val * 1.002:  # short above EMA — skip
+            if signal == -1 and closes[-1] < ema_val * 0.995:  # don't short when price is already extended below EMA
                 return
 
         price = self.data_provider.get_price(symbol)
@@ -1510,8 +1513,9 @@ class SaiyanBot:
         if trade is None:
             return
 
-        # Reset consecutive SL counter on new entry
+        # Track signal to prevent re-entry on the same HTF crossover
         if state:
+            state.prev_signal = signal
             state.last_signal_bar = self.tick_count
 
     def _update_regime(self):
