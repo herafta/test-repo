@@ -1283,9 +1283,9 @@ REGIME_PARAMS = {
     },
     "MEAN_REVERSION": {
         "trade_direction": "BOTH",
-        "tp1_pct": 0.8, "tp2_pct": 1.3, "tp3_pct": 1.8,
-        "sl_pct": 0.5, "tp1_qty": 70.0, "tp2_qty": 20.0, "tp3_qty": 10.0,
-        "description": "Low volatility — 1.6:1 RR at TP1, tighter SL, mean-reversion entries.",
+        "tp1_pct": 1.92, "tp2_pct": 3.12, "tp3_pct": 4.32,
+        "sl_pct": 1.2, "tp1_qty": 85.0, "tp2_qty": 10.0, "tp3_qty": 5.0,
+        "description": "Moderate volatility — 1.6:1 RR at TP1, wider SL, mean-reversion entries.",
         "fits": ["Mean reversion scalping", "Fading extremes"],
     },
     "HIGH_VOLATILITY": {
