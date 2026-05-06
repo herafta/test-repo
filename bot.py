@@ -1485,9 +1485,9 @@ class SaiyanBot:
             return
         # Long only when RSI is not already overbought; short only not oversold
         # Also reject signals when RSI is extreme (likely mean-reversion spike)
-        if signal == 1  and (rsi > 65 or rsi < 35):   # don't buy overbought or extreme oversold bounce
+        if signal == 1  and rsi > 72:   # don't chase already-overbought for a long
             return
-        if signal == -1 and (rsi < 35 or rsi > 65):   # don't short oversold or extreme overbought
+        if signal == -1 and rsi < 28:   # don't short already-oversold
             return
 
         # ── EMA trend alignment ───────────────────────────────────────────────
