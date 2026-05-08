@@ -1055,8 +1055,9 @@ class SignalEngine:
         # Pad to same length
         if not result:
             return series
-        while len(result) < len(series):
-            result.insert(0, result[0])
+        pad = len(series) - len(result)
+        if pad > 0:
+            result = [result[0]] * pad + result
         return result[-len(series):]
 
 
@@ -1283,8 +1284,8 @@ REGIME_PARAMS = {
     },
     "MEAN_REVERSION": {
         "trade_direction": "BOTH",
-        "tp1_pct": 1.92, "tp2_pct": 3.12, "tp3_pct": 4.32,
-        "sl_pct": 1.2, "tp1_qty": 85.0, "tp2_qty": 10.0, "tp3_qty": 05.0,
+        "tp1_pct": 2.0, "tp2_pct": 3.2, "tp3_pct": 4.5,
+        "sl_pct": 1.1, "tp1_qty": 85.0, "tp2_qty": 10.0, "tp3_qty": 5.0,
         "description": "Moderate volatility — 1.6:1 RR at TP1, wider SL, mean-reversion entries.",
         "fits": ["Mean reversion scalping", "Fading extremes"],
     },
@@ -1339,7 +1340,7 @@ class SaiyanBot:
         self.ai_recommendations: list = []
 
         # Equity curve (timestamp, equity)
-        self.equity_curve: list = []
+        self.equity_curve: deque = deque(maxlen=500)
         self._last_regime_update = 0
 
     def _tick_loop_wrapper(self):
@@ -1373,7 +1374,7 @@ class SaiyanBot:
             max_num = max(int(i[1:]) for i in all_ids if i[1:].isdigit())
             self.trade_manager._trade_counter = max_num
         # Restore equity curve
-        self.equity_curve = db_load_equity()
+        self.equity_curve = deque(db_load_equity(), maxlen=500)
 
         # Start data feeds immediately — bootstrap runs in background
         threading.Thread(target=self._tick_loop_wrapper, daemon=True).start()
@@ -1452,8 +1453,6 @@ class SaiyanBot:
         ts = datetime.utcnow().isoformat()
         point = {"time": ts, "equity": round(total_equity, 2), "balance": round(balance, 2)}
         self.equity_curve.append(point)
-        if len(self.equity_curve) > 500:
-            self.equity_curve.pop(0)
         # Persist every 10th tick to avoid excessive writes
         if self.tick_count % 10 == 0:
             db_save_equity(ts, total_equity, balance)
@@ -1476,28 +1475,46 @@ class SaiyanBot:
             return
         # Deduplicate: don't re-enter on the same crossover that already triggered
         if state and signal == state.prev_signal:
-            return
+            # Allow re-entry if no open trade on this symbol (trade has since closed)
+            if any(t.symbol == symbol for t in self.trade_manager.open_trades.values()):
+                return
+            state.prev_signal = 0  # release stale lock — position already closed
 
         # ── RSI confirmation filter ───────────────────────────────────────────
         closes = [c.close for c in candles]
         rsi = Indicators.rsi(closes, 14)
         if rsi is None:
             return
-        # Long only when RSI is not already overbought; short only not oversold
-        # Also reject signals when RSI is extreme (likely mean-reversion spike)
-        if signal == 1  and rsi > 72:   # don't chase already-overbought for a long
-            return
-        if signal == -1 and rsi < 28:   # don't short already-oversold
-            return
+        mean_rev_regime = self.regime in ("MEAN_REVERSION", "SIDEWAYS")
+        if mean_rev_regime:
+            # Mean reversion: long only from oversold pressure, short only from overbought
+            if signal == 1  and rsi > 45:   # long only when RSI confirms oversold bias
+                return
+            if signal == -1 and rsi < 55:   # short only when RSI confirms overbought bias
+                return
+        else:
+            # Trend-following: don't chase extremes
+            if signal == 1  and rsi > 72:
+                return
+            if signal == -1 and rsi < 28:
+                return
 
-        # ── EMA trend alignment ───────────────────────────────────────────────
+        # ── EMA trend alignment (regime-aware) ───────────────────────────────
         ema50 = Indicators.ema(closes, 50)
         ema_val = next((v for v in reversed(ema50) if v), None)
         if ema_val:
-            if signal == 1  and closes[-1] > ema_val * 1.005:  # don't long when price is already extended above EMA
-                return
-            if signal == -1 and closes[-1] < ema_val * 0.995:  # don't short when price is already extended below EMA
-                return
+            if mean_rev_regime:
+                # Mean reversion: price must be displaced from EMA to have reversion room
+                if signal == 1  and closes[-1] >= ema_val:      # long only when price is below EMA
+                    return
+                if signal == -1 and closes[-1] <= ema_val:      # short only when price is above EMA
+                    return
+            else:
+                # Trend-following: don't fight momentum
+                if signal == 1  and closes[-1] < ema_val * 0.995:
+                    return
+                if signal == -1 and closes[-1] > ema_val * 1.005:
+                    return
 
         price = self.data_provider.get_price(symbol)
         if price <= 0:
