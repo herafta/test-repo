@@ -1070,8 +1070,8 @@ class SignalEngine:
         # HTF series (multiplier × TF)
         htf_mult = self.config.int_res
         # Simulate HTF by resampling
-        htf_closes = self._resample(closes, htf_mult, mode="close")
-        htf_opens  = self._resample(opens,  htf_mult, mode="open")
+        htf_closes = self._resample(candles, htf_mult, mode="close")
+        htf_opens  = self._resample(candles, htf_mult, mode="open")
 
         close_ma = self.compute_ma_series(closes)
         open_ma  = self.compute_ma_series(opens)
@@ -1103,19 +1103,32 @@ class SignalEngine:
             return -1
         return 0
 
-    def _resample(self, series: list, mult: int, mode: str = "close") -> list:
-        """Simulate HTF resolution: forward-fill the last closed HTF bar value."""
+    def _resample(self, candles: list, mult: int, mode: str = "close") -> list:
         if mult <= 1:
-            return list(series)
-        n = len(series)
-        out = [None] * n
+            return [c.close if mode == "close" else c.open for c in candles]
+        
+        out = []
+        tf_sec = (candles[1].timestamp - candles[0].timestamp) if len(candles) > 1 else 180.0
+        htf_sec = tf_sec * mult
         last_val = None
-        for i in range(n):
-            # An HTF bar closes at indexes where (i+1) % mult == 0
-            if (i + 1) % mult == 0:
-                chunk = series[i - mult + 1: i + 1]
+        current_htf_start = None
+        chunk = []
+        
+        for c in candles:
+            val = c.close if mode == "close" else c.open
+            htf_start = (c.timestamp // htf_sec) * htf_sec
+            
+            if current_htf_start is None:
+                current_htf_start = htf_start
+            
+            if htf_start != current_htf_start:
                 last_val = chunk[-1] if mode == "close" else chunk[0]
-            out[i] = last_val if last_val is not None else series[i]
+                current_htf_start = htf_start
+                chunk = []
+            
+            chunk.append(val)
+            out.append(last_val if last_val is not None else val)
+            
         return out
 
 
