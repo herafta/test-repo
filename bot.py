@@ -534,9 +534,9 @@ class PaperExchange:
         self.initial_balance = 10_000.0
         self._lock = threading.Lock()
 
-    # Realistic slippage model: 0.04% taker fee + 0.02% spread
-    TAKER_FEE  = 0.0004
-    SLIP_PCT   = 0.0002
+    # 0.04% taker fee + 0.02% spread per side
+    TAKER_FEE = 0.0004
+    SLIP_PCT = 0.0002
 
     def get_balance(self) -> float:
         return self.balance_usdt
@@ -548,10 +548,9 @@ class PaperExchange:
                 usdt_amount = self.balance_usdt
             if usdt_amount < 5:
                 return None
-            # Slippage: buys fill slightly higher, sells slightly lower
+
             slip = self.SLIP_PCT + self.TAKER_FEE
-            fill_price = current_price * (1 + slip) if side == "long" \
-                         else current_price * (1 - slip)
+            fill_price = current_price * (1 + slip) if side == "long" else current_price * (1 - slip)
             qty = usdt_amount / fill_price
             self.balance_usdt -= usdt_amount
             return {"qty": qty, "avg_price": fill_price}
@@ -559,12 +558,17 @@ class PaperExchange:
     def close_order(self, symbol: str, qty: float, entry_price: float,
                     exit_price: float, side: str) -> float:
         with self._lock:
+            slip = self.SLIP_PCT + self.TAKER_FEE
+            fill_exit = exit_price * (1 - slip) if side == "long" else exit_price * (1 + slip)
+
             if side == "long":
-                pnl = (exit_price - entry_price) * qty
+                pnl = (fill_exit - entry_price) * qty
+                released = qty * fill_exit
             else:
-                pnl = (entry_price - exit_price) * qty
-            # Return original capital plus profit or loss
-            self.balance_usdt += (qty * entry_price) + pnl
+                pnl = (entry_price - fill_exit) * qty
+                released = (qty * entry_price) + pnl
+
+            self.balance_usdt += released
             return pnl
 
 
@@ -596,7 +600,7 @@ class LiveExchange:
             return self._cached_balance
         try:
             bal = self.exchange.fetch_balance()
-            self._cached_balance = bal["USDT"]["free"]
+            self._cached_balance = float(bal.get("USDT", {}).get("free", 0.0))
             self._last_balance_fetch = now
             return self._cached_balance
         except Exception:
@@ -871,11 +875,13 @@ class MarketDataProvider:
                     continue
                 with self._lock:
                     existing = self._candle_history[sym]
-                    last_ts = existing[-1].timestamp if existing else 0
                     for c in new_candles:
-                        if c.timestamp > last_ts:
+                        if not existing:
                             existing.append(c)
-                            last_ts = c.timestamp
+                        elif c.timestamp > existing[-1].timestamp:
+                            existing.append(c)
+                        elif c.timestamp == existing[-1].timestamp:
+                            existing[-1] = c
             except Exception as e:
                 log.debug(f"Candle refresh {sym}: {e}")
             time.sleep(0.05)
@@ -962,16 +968,16 @@ class MarketDataProvider:
             # Trend score (want some trend, not choppy)
             ema_fast = Indicators.ema(closes, 5)
             ema_slow = Indicators.ema(closes, 20)
-            ef = [v for v in ema_fast if v]
-            es = [v for v in ema_slow if v]
             trend_score = 0.5
-            if ef and es:
-                cross_count = sum(
-                    1 for i in range(1, min(len(ef), len(es)))
-                    if (ef[i] > es[i]) != (ef[i-1] > es[i-1])
-                )
-                # Fewer crosses = more trending
-                trend_score = max(0, 1 - cross_count / 20)
+            cross_count = 0
+            for i in range(1, len(closes)):
+                if ema_fast[i] is None or ema_slow[i] is None:
+                    continue
+                if ema_fast[i - 1] is None or ema_slow[i - 1] is None:
+                    continue
+                if (ema_fast[i] > ema_slow[i]) != (ema_fast[i - 1] > ema_slow[i - 1]):
+                    cross_count += 1
+            trend_score = max(0, 1 - cross_count / 20)
 
             score = vol_score * 0.5 + trend_score * 0.5
             ranked.append((sym, score))
@@ -996,10 +1002,16 @@ class SignalEngine:
             return Indicators.compute_ma(
                 self.config.basis_type, values, self.config.basis_len,
                 self.config.offset_sigma, self.config.offset_alma)
-                
-        key = (values[-1], values[-2], values[-3], len(values),
-               self.config.basis_type, self.config.basis_len,
-               self.config.offset_sigma, self.config.offset_alma)
+
+        tail = tuple(round(v, 10) for v in values[-min(len(values), 20):])
+        key = (
+            tail,
+            len(values),
+            self.config.basis_type,
+            self.config.basis_len,
+            self.config.offset_sigma,
+            self.config.offset_alma,
+        )
                
         cached = self._ma_cache.get(key)
         if cached is not None:
@@ -1586,7 +1598,7 @@ class SaiyanBot:
             pass  # direction applied via _effective_direction() dynamically
 
     def _effective_direction(self) -> str:
-        if self.config.market_regime_auto:
+        if self.config.market_regime_auto and not self.config.params_locked:
             return REGIME_PARAMS.get(self.regime, {}).get(
                 "trade_direction", self.config.trade_direction)
         return self.config.trade_direction
