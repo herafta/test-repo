@@ -259,6 +259,7 @@ class Trade:
     tp3_hit: bool = False
     regime_at_entry: str = ""
     current_price: float = 0.0
+    initial_qty: float = 0.0
 
     @property
     def unrealized_pnl(self) -> float:
@@ -527,16 +528,15 @@ class Indicators:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class PaperExchange:
-    """Simulates order execution with realistic paper trading"""
+    """Simulates futures-style paper execution with reserved margin accounting"""
 
     def __init__(self):
-        self.balance_usdt = 10_000.0
+        self.balance_usdt = 10_000.0         # free balance
         self.initial_balance = 10_000.0
         self._lock = threading.Lock()
 
-    # 0.04% taker fee + 0.02% spread per side
     TAKER_FEE = 0.0004
-    SLIP_PCT = 0.0002
+    SLIP_PCT  = 0.0002
 
     def get_balance(self) -> float:
         return self.balance_usdt
@@ -552,23 +552,22 @@ class PaperExchange:
             slip = self.SLIP_PCT + self.TAKER_FEE
             fill_price = current_price * (1 + slip) if side == "long" else current_price * (1 - slip)
             qty = usdt_amount / fill_price
+
+            # Reserve capital used for this position leg
             self.balance_usdt -= usdt_amount
-            return {"qty": qty, "avg_price": fill_price}
+            return {"qty": qty, "avg_price": fill_price, "reserved_usdt": usdt_amount}
 
     def close_order(self, symbol: str, qty: float, entry_price: float,
                     exit_price: float, side: str) -> float:
         with self._lock:
             slip = self.SLIP_PCT + self.TAKER_FEE
-            fill_exit = exit_price * (1 - slip) if side == "long" else exit_price * (1 + slip)
+            effective_exit = exit_price * (1 - slip) if side == "long" else exit_price * (1 + slip)
 
-            if side == "long":
-                pnl = (fill_exit - entry_price) * qty
-                released = qty * fill_exit
-            else:
-                pnl = (entry_price - fill_exit) * qty
-                released = (qty * entry_price) + pnl
+            pnl = (effective_exit - entry_price) * qty if side == "long" \
+                  else (entry_price - effective_exit) * qty
 
-            self.balance_usdt += released
+            released_margin = qty * entry_price
+            self.balance_usdt += released_margin + pnl
             return pnl
 
 
@@ -584,9 +583,13 @@ class LiveExchange:
                 "apiKey": api_key,
                 "secret": api_secret,
                 "enableRateLimit": True,
-                "options": {"defaultType": "future"},
+                "options": {
+                    "defaultType": "future",
+                    "adjustForTimeDifference": True,
+                },
             })
             self.exchange.load_markets()
+            self.markets = self.exchange.markets
             log.info("Live exchange connected")
         except Exception as e:
             log.error(f"Exchange init failed: {e}")
@@ -609,17 +612,32 @@ class LiveExchange:
     def place_order(self, symbol: str, side: str, usdt_amount: float,
                     current_price: float) -> Optional[dict]:
         try:
+            market = self.exchange.market(symbol)
             raw_qty = usdt_amount / current_price
             formatted_qty = float(self.exchange.amount_to_precision(symbol, raw_qty))
-            
+
+            min_qty = market.get("limits", {}).get("amount", {}).get("min")
+            min_cost = market.get("limits", {}).get("cost", {}).get("min")
+
+            if min_qty is not None and formatted_qty < min_qty:
+                log.error(f"Order failed {symbol}: qty {formatted_qty} < min_qty {min_qty}")
+                return None
+
+            if min_cost is not None and (formatted_qty * current_price) < min_cost:
+                log.error(f"Order failed {symbol}: notional too small")
+                return None
+
             if formatted_qty <= 0:
                 log.error(f"Order failed {symbol}: Quantity too small after formatting")
                 return None
-                
+
             order = self.exchange.create_market_order(
                 symbol, "buy" if side == "long" else "sell", formatted_qty
             )
-            return {"qty": float(order["filled"]), "avg_price": float(order["average"])}
+
+            filled = float(order.get("filled") or formatted_qty)
+            avg_price = float(order.get("average") or current_price)
+            return {"qty": filled, "avg_price": avg_price}
         except Exception as e:
             log.error(f"Order failed {symbol}: {e}")
             return None
@@ -629,26 +647,31 @@ class LiveExchange:
         try:
             close_side = "sell" if side == "long" else "buy"
             formatted_qty = float(self.exchange.amount_to_precision(symbol, qty))
-            
+
             if formatted_qty <= 0:
                 log.warning(f"Skipping close for {symbol}: formatted quantity is zero")
                 return 0.0
-                
+
             order = self.exchange.create_market_order(
                 symbol, close_side, formatted_qty, params={"reduceOnly": True}
             )
-            
-            actual_exit = order.get("average")
-            if actual_exit is None or actual_exit == 0:
-                actual_exit = exit_price
-                
-            executed_qty = float(order.get("filled", formatted_qty))
+
+            actual_exit = float(order.get("average") or exit_price)
+            executed_qty = float(order.get("filled") or formatted_qty)
+
             pnl = (actual_exit - entry_price) * executed_qty if side == "long" \
                   else (entry_price - actual_exit) * executed_qty
-            return pnl
+
+            fee_cost = 0.0
+            fee = order.get("fee")
+            if fee and fee.get("cost") is not None:
+                fee_cost = float(fee["cost"])
+
+            return pnl - fee_cost
         except Exception as e:
             log.error(f"Failed to close order {symbol}: {e}")
-            return (exit_price - entry_price) * qty if side == "long" else (entry_price - exit_price) * qty
+            fallback = (exit_price - entry_price) * qty if side == "long" else (entry_price - exit_price) * qty
+            return fallback
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -847,10 +870,15 @@ class MarketDataProvider:
     _candle_fetch_interval: float = 180.0  # new 3-min bar every 180s
 
     def _fetch_real_prices(self) -> dict:
-        """Bulk spot price fetch — Binance public, no auth."""
+        """Fetch prices only for tracked universe symbols."""
         try:
-            import urllib.request, json as _json
-            url = "https://api.binance.com/api/v3/ticker/price"
+            import urllib.request, json as _json, urllib.parse
+            symbols = self.get_all_symbols()
+            if not symbols:
+                return {}
+
+            encoded = urllib.parse.quote(_json.dumps(symbols))
+            url = f"https://api.binance.com/api/v3/ticker/price?symbols={encoded}"
             req = urllib.request.Request(url, headers={"User-Agent": "SaiyanBot/1.0"})
             with urllib.request.urlopen(req, timeout=4) as resp:
                 data = _json.loads(resp.read().decode())
@@ -870,7 +898,7 @@ class MarketDataProvider:
             if not self._candles_are_real.get(sym):
                 continue
             try:
-                new_candles = self._fetch_klines(sym, interval="3m", limit=3)
+                new_candles = self._fetch_klines(sym, interval="3m", limit=2)
                 if not new_candles:
                     continue
                 with self._lock:
@@ -941,7 +969,7 @@ class MarketDataProvider:
 
     def get_all_symbols(self) -> list:
         with self._lock:
-            return [s for s, _ in self.UNIVERSE]
+            return [s for s, _ in self.UNIVERSE if self._candles_are_real.get(s, False)]
 
     def get_top_pairs(self, n: int = 100) -> list:
         """
@@ -996,6 +1024,7 @@ class SignalEngine:
     def __init__(self, config: BotConfig):
         self.config = config
         self._ma_cache: dict = {}   # key: hash of values tail and params -> series
+        self._ma_cache_order: deque = deque(maxlen=300)
 
     def compute_ma_series(self, values: list) -> list:
         if len(values) < 3:
@@ -1021,10 +1050,12 @@ class SignalEngine:
             self.config.basis_type, values, self.config.basis_len,
             self.config.offset_sigma, self.config.offset_alma)
             
-        # Prevent memory leak from stale keys across ticks
-        if len(self._ma_cache) > 200:
-            self._ma_cache.clear()
-            
+        if key not in self._ma_cache:
+            if len(self._ma_cache_order) >= 300:
+                oldest = self._ma_cache_order.popleft()
+                self._ma_cache.pop(oldest, None)
+            self._ma_cache_order.append(key)
+
         self._ma_cache[key] = result
         return result
 
@@ -1104,7 +1135,7 @@ class TradeManager:
 
     def _new_id(self) -> str:
         self._trade_counter += 1
-        return f"T{self._trade_counter:04d}"
+        return f"T{int(time.time() * 100)}_{self._trade_counter}"
 
     def can_open(self, symbol: str) -> bool:
         with self._lock:
@@ -1142,6 +1173,7 @@ class TradeManager:
             status="open",
             regime_at_entry=regime,
             current_price=price,
+            initial_qty=qty,
         )
         with self._lock:
             self.open_trades[trade.id] = trade
@@ -1358,7 +1390,7 @@ class SaiyanBot:
         self.trade_manager  = TradeManager(self.exchange, self.config)
 
         self.active_symbols: list = []
-        self.symbol_states:  dict = {}
+        self.symbol_states: dict = {}
         self.regime: str = "DETECTING"
         self.regime_info: dict = REGIME_PARAMS["DETECTING"]
 
@@ -1369,6 +1401,26 @@ class SaiyanBot:
         # Equity curve (timestamp, equity)
         self.equity_curve: deque = deque(maxlen=500)
         self._last_regime_update = 0
+        self._last_pair_refresh = 0
+
+    def _refresh_active_symbols(self):
+        try:
+            ranked = self.data_provider.get_top_pairs(self.config.top_n_pairs)
+            if len(ranked) < 5:
+                return
+
+            open_symbols = {t.symbol for t in self.trade_manager.open_trades.values()}
+            preserved = [s for s in self.active_symbols if s in open_symbols]
+            refreshed = preserved + [s for s in ranked if s not in preserved]
+            self.active_symbols = refreshed[:self.config.top_n_pairs]
+
+            for sym in self.active_symbols:
+                if sym not in self.symbol_states:
+                    self.symbol_states[sym] = SymbolState(symbol=sym)
+
+            log.info(f"Active pair list refreshed: {len(self.active_symbols)} symbols")
+        except Exception as e:
+            log.debug(f"Pair refresh failed: {e}")
 
     def _tick_loop_wrapper(self):
         """Wrapper so tick loop is always defined on the class."""
@@ -1392,8 +1444,8 @@ class SaiyanBot:
         # Reconstruct the exact paper balance to prevent double-funding on restart
         if self.config.paper_mode:
             total_realized = sum(t.realized_pnl for t in closed_t)
-            deployed = sum(t.qty * t.entry_price for t in open_t.values())
-            self.exchange.balance_usdt = self.exchange.initial_balance + total_realized - deployed
+            reserved_margin = sum((t.entry_price * t.qty) for t in open_t.values())
+            self.exchange.balance_usdt = self.exchange.initial_balance + total_realized - reserved_margin
             
         # Restore trade counter to avoid ID collisions
         all_ids = [t.id for t in closed_t] + [t.id for t in open_t.values()]
@@ -1424,8 +1476,10 @@ class SaiyanBot:
         # Select top pairs — scored on real bootstrapped data
         self.active_symbols = self.data_provider.get_top_pairs(self.config.top_n_pairs)
         if len(self.active_symbols) < 5:
-            # Last resort: take whatever bootstrapped, unsorted
-            self.active_symbols = self.data_provider.get_all_symbols()
+            self.active_symbols = [
+                s for s in self.data_provider.get_all_symbols()
+                if self.data_provider.is_ready(s)
+            ]
             log.warning(f"Scoring insufficient — using all {len(self.active_symbols)} ready symbols")
 
         log.info(f"Selected {len(self.active_symbols)} pairs")
@@ -1456,13 +1510,21 @@ class SaiyanBot:
             self._update_regime()
             self._last_regime_update = time.time()
 
-        # 2. Update open trades (TP/SL checks)
-        for trade in list(self.trade_manager.open_trades.values()):
+        # 2. Refresh ranked trading pairs periodically
+        if time.time() - self._last_pair_refresh > 180:
+            self._refresh_active_symbols()
+            self._last_pair_refresh = time.time()
+
+        # 3. Update open trades (TP/SL checks)
+        with self.trade_manager._lock:
+            open_trades_snapshot = list(self.trade_manager.open_trades.values())
+
+        for trade in open_trades_snapshot:
             price = self.data_provider.get_price(trade.symbol)
             if price > 0:
                 self.trade_manager.update_trade(trade, price)
 
-        # 3. Scan for new signals
+        # 4. Scan for new signals
         effective_direction = self._effective_direction()
         for sym in self.active_symbols:
             try:
@@ -1470,15 +1532,14 @@ class SaiyanBot:
             except Exception as e:
                 log.debug(f"Symbol error {sym}: {e}")
 
-        # 4. Record equity
+        # 5. Record equity
         balance = self.exchange.get_balance()
-        # Mark-to-market: balance + (current notional of remaining qty)
-        mtm = sum(t.current_price * t.qty
-                  for t in self.trade_manager.open_trades.values()
-                  if t.current_price > 0)
-        unrealized = sum(t.unrealized_pnl
-                         for t in self.trade_manager.open_trades.values())
-        total_equity = balance + mtm
+        unrealized = sum(
+            t.unrealized_pnl for t in self.trade_manager.open_trades.values()
+            if t.current_price > 0
+        )
+        reserved_margin = sum(t.entry_price * t.qty for t in self.trade_manager.open_trades.values())
+        total_equity = balance + reserved_margin + unrealized
         ts = datetime.utcnow().isoformat()
         point = {"time": ts, "equity": round(total_equity, 2), "balance": round(balance, 2)}
         self.equity_curve.append(point)
@@ -1501,13 +1562,14 @@ class SaiyanBot:
 
         signal = self.signal_engine.generate_signal(candles)
         if signal == 0:
+            if state:
+                state.prev_signal = 0
             return
-        # Deduplicate: don't re-enter on the same crossover that already triggered
+
+        # Deduplicate: don't re-enter on the same live position signal
         if state and signal == state.prev_signal:
-            # Allow re-entry if no open trade on this symbol (trade has since closed)
             if any(t.symbol == symbol for t in self.trade_manager.open_trades.values()):
                 return
-            state.prev_signal = 0  # release stale lock — position already closed
 
         # ── RSI confirmation filter ───────────────────────────────────────────
         closes = [c.close for c in candles]
@@ -1750,10 +1812,11 @@ class SaiyanBot:
 
     def reset_data(self):
         with self._lock:
-            self.trade_manager.open_trades.clear()
-            self.trade_manager.closed_trades.clear()
+            with self.trade_manager._lock:
+                self.trade_manager.open_trades.clear()
+                self.trade_manager.closed_trades.clear()
+                self.trade_manager._trade_counter = 0
             self.equity_curve.clear()
-            self.trade_manager._trade_counter = 0
             
             if self.config.paper_mode:
                 self.exchange.balance_usdt = self.exchange.initial_balance
