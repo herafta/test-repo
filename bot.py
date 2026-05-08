@@ -1676,7 +1676,7 @@ class SaiyanBot:
             "stats": stats,
             "open_trades": open_trades,
             "closed_trades": closed_trades,
-            "equity_curve": self.equity_curve[-100:],
+            "equity_curve": list(self.equity_curve)[-100:],
             "pair_stats": pair_stats[:20],
             "ai_recommendations": self.ai_recommendations[:10],
             "config": asdict(self.config),
