@@ -1153,8 +1153,9 @@ class TradeManager:
             return (side == "long"  and current_price <= level) or \
                    (side == "short" and current_price >= level)
 
+        # Evaluate in priority order, allowing cascaded fills on gap candles
         # TP1
-        if not trade.tp1_hit and hit_tp(trade.tp1):
+        if trade.status == "open" and not trade.tp1_hit and hit_tp(trade.tp1):
             trade.tp1_hit = True
             close_qty = trade.qty * (self.config.tp1_qty / 100.0)
             pnl = self.exchange.close_order(trade.symbol, close_qty, trade.entry_price,
@@ -1165,22 +1166,14 @@ class TradeManager:
             db_upsert_trade(trade)
             log.info(f"TP1 hit {trade.symbol} pnl={pnl:.4f} | SL moved to BE")
 
-        # TP2
-        elif trade.tp1_hit and not trade.tp2_hit and hit_tp(trade.tp2):
+        # TP2 — close tp2_qty share of remaining (tp2 + tp3)
+        if trade.status == "open" and trade.tp1_hit and not trade.tp2_hit and hit_tp(trade.tp2):
             trade.tp2_hit = True
-            
-            tp1_pct = self.config.tp1_qty
-            tp2_pct = self.config.tp2_qty
-            tp3_pct = self.config.tp3_qty
-            total_pct = tp1_pct + tp2_pct + tp3_pct
-            
-            # Normalise in case user-supplied qtys do not sum to 100
-            tp2_norm = tp2_pct / total_pct * 100.0 if total_pct > 0 else tp2_pct
-            tp1_norm = tp1_pct / total_pct * 100.0 if total_pct > 0 else tp1_pct
-            
-            fraction_of_remaining = tp2_norm / (100.0 - tp1_norm) if tp1_norm < 100 else 1.0
-            close_qty = trade.qty * min(fraction_of_remaining, 1.0)
-            
+            tp2_share = self.config.tp2_qty
+            tp3_share = self.config.tp3_qty
+            denom = tp2_share + tp3_share
+            fraction_of_remaining = tp2_share / denom if denom > 0 else 1.0
+            close_qty = trade.qty * fraction_of_remaining
             pnl = self.exchange.close_order(trade.symbol, close_qty, trade.entry_price,
                                             current_price, side)
             trade.realized_pnl += pnl
@@ -1189,15 +1182,15 @@ class TradeManager:
             log.info(f"TP2 hit {trade.symbol} pnl={pnl:.4f}")
 
         # TP3 / full exit
-        elif trade.tp2_hit and not trade.tp3_hit and hit_tp(trade.tp3):
+        if trade.status == "open" and trade.tp2_hit and not trade.tp3_hit and hit_tp(trade.tp3):
             trade.tp3_hit = True
             pnl = self.exchange.close_order(trade.symbol, trade.qty, trade.entry_price,
                                             current_price, side)
             trade.realized_pnl += pnl
             self._close_trade(trade, current_price, "TP3")
 
-        # SL
-        elif hit_sl(trade.sl):
+        # SL — checked last so TPs on same bar take precedence
+        if trade.status == "open" and hit_sl(trade.sl):
             pnl = self.exchange.close_order(trade.symbol, trade.qty, trade.entry_price,
                                             current_price, side)
             trade.realized_pnl += pnl
@@ -1467,11 +1460,13 @@ class SaiyanBot:
 
         # 4. Record equity
         balance = self.exchange.get_balance()
+        # Mark-to-market: balance + (current notional of remaining qty)
+        mtm = sum(t.current_price * t.qty
+                  for t in self.trade_manager.open_trades.values()
+                  if t.current_price > 0)
         unrealized = sum(t.unrealized_pnl
                          for t in self.trade_manager.open_trades.values())
-        deployed = sum(t.entry_price * t.qty 
-                       for t in self.trade_manager.open_trades.values())
-        total_equity = balance + deployed + unrealized
+        total_equity = balance + mtm
         ts = datetime.utcnow().isoformat()
         point = {"time": ts, "equity": round(total_equity, 2), "balance": round(balance, 2)}
         self.equity_curve.append(point)
