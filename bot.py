@@ -365,22 +365,25 @@ class Indicators:
     @staticmethod
     def tema(values: list, period: int) -> list:
         e1 = Indicators.ema(values, period)
-        
         e1_valid = [v for v in e1 if v is not None]
-        e2_temp = Indicators.ema(e1_valid, period)
-        e2 = [None] * (len(e1) - len(e2_temp)) + e2_temp
-        
+        first_valid_e1 = next((i for i, v in enumerate(e1) if v is not None), len(e1))
+
+        e2_inner = Indicators.ema(e1_valid, period)
+        e2 = [None] * first_valid_e1 + e2_inner
+        e2 = e2[:len(values)] + [None] * max(0, len(values) - len(e2))
+
         e2_valid = [v for v in e2 if v is not None]
-        e3_temp = Indicators.ema(e2_valid, period)
-        e3 = [None] * (len(e2) - len(e3_temp)) + e3_temp
-        
-        result = []
-        for i in range(len(values)):
-            if e1[i] is not None and e2[i] is not None and e3[i] is not None:
-                result.append(3 * e1[i] - 3 * e2[i] + e3[i])
-            else:
-                result.append(None)
-        return result
+        first_valid_e2 = next((i for i, v in enumerate(e2) if v is not None), len(e2))
+        e3_inner = Indicators.ema(e2_valid, period)
+        e3 = [None] * first_valid_e2 + e3_inner
+        e3 = e3[:len(values)] + [None] * max(0, len(values) - len(e3))
+
+        return [
+            3 * e1[i] - 3 * e2[i] + e3[i]
+            if e1[i] is not None and e2[i] is not None and e3[i] is not None
+            else None
+            for i in range(len(values))
+        ]
 
     @staticmethod
     def compute_ma(ma_type: str, values: list, period: int,
@@ -429,7 +432,6 @@ class Indicators:
     def pivot_high(highs: list, left: int, right: int) -> Optional[float]:
         if len(highs) < left + right + 1:
             return None
-        idx = left  # pivot candidate index from right end
         candidate_idx = len(highs) - 1 - right
         if candidate_idx < left:
             return None
@@ -987,15 +989,32 @@ class SignalEngine:
 
     def __init__(self, config: BotConfig):
         self.config = config
+        self._ma_cache: dict = {}   # key: hash of values tail and params -> series
 
     def compute_ma_series(self, values: list) -> list:
-        return Indicators.compute_ma(
-            self.config.basis_type,
-            values,
-            self.config.basis_len,
-            self.config.offset_sigma,
-            self.config.offset_alma,
-        )
+        if len(values) < 3:
+            return Indicators.compute_ma(
+                self.config.basis_type, values, self.config.basis_len,
+                self.config.offset_sigma, self.config.offset_alma)
+                
+        key = (values[-1], values[-2], values[-3], len(values),
+               self.config.basis_type, self.config.basis_len,
+               self.config.offset_sigma, self.config.offset_alma)
+               
+        cached = self._ma_cache.get(key)
+        if cached is not None:
+            return cached
+            
+        result = Indicators.compute_ma(
+            self.config.basis_type, values, self.config.basis_len,
+            self.config.offset_sigma, self.config.offset_alma)
+            
+        # Prevent memory leak from stale keys across ticks
+        if len(self._ma_cache) > 200:
+            self._ma_cache.clear()
+            
+        self._ma_cache[key] = result
+        return result
 
     def generate_signal(self, candles: list) -> int:
         """Returns: 1=long entry, -1=short entry, 0=no signal"""
@@ -1042,23 +1061,19 @@ class SignalEngine:
         return 0
 
     def _resample(self, series: list, mult: int, mode: str = "close") -> list:
-        """Simulate HTF resolution without averaging"""
+        """Simulate HTF resolution: forward-fill the last closed HTF bar value."""
         if mult <= 1:
-            return series
-        result = []
-        for i in range(0, len(series) - mult + 1, mult):
-            chunk = series[i:i + mult]
-            if mode == "close":
-                result.append(chunk[-1])
-            else:
-                result.append(chunk[0])
-        # Pad to same length
-        if not result:
-            return series
-        pad = len(series) - len(result)
-        if pad > 0:
-            result = [result[0]] * pad + result
-        return result[-len(series):]
+            return list(series)
+        n = len(series)
+        out = [None] * n
+        last_val = None
+        for i in range(n):
+            # An HTF bar closes at indexes where (i+1) % mult == 0
+            if (i + 1) % mult == 0:
+                chunk = series[i - mult + 1: i + 1]
+                last_val = chunk[-1] if mode == "close" else chunk[0]
+            out[i] = last_val if last_val is not None else series[i]
+        return out
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1156,7 +1171,14 @@ class TradeManager:
             
             tp1_pct = self.config.tp1_qty
             tp2_pct = self.config.tp2_qty
-            fraction_of_remaining = tp2_pct / (100.0 - tp1_pct) if tp1_pct < 100 else 1.0
+            tp3_pct = self.config.tp3_qty
+            total_pct = tp1_pct + tp2_pct + tp3_pct
+            
+            # Normalise in case user-supplied qtys do not sum to 100
+            tp2_norm = tp2_pct / total_pct * 100.0 if total_pct > 0 else tp2_pct
+            tp1_norm = tp1_pct / total_pct * 100.0 if total_pct > 0 else tp1_pct
+            
+            fraction_of_remaining = tp2_norm / (100.0 - tp1_norm) if tp1_norm < 100 else 1.0
             close_qty = trade.qty * min(fraction_of_remaining, 1.0)
             
             pnl = self.exchange.close_order(trade.symbol, close_qty, trade.entry_price,
