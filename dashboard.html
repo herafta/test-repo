@@ -799,15 +799,27 @@ input:checked + .slider::before { transform: translateX(20px); background: var(-
         </div>
       </div>
       <div class="card">
-        <div class="card-title">🔧 Bot Status</div>
-        <div style="display:flex;flex-direction:column;gap:8px;">
-          <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">Mode</span><span id="s-mode" class="warning">PAPER</span></div>
-          <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">Direction</span><span id="s-dir" class="accent">BOTH</span></div>
-          <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">Pairs Active</span><span class="accent" id="s-pairs">0</span></div>
-          <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">Ticks</span><span class="accent" id="s-ticks">0</span></div>
-        </div>
-      </div>
-    </div>
+		<div class="card-title">🔧 Bot Status</div>
+		<div style="display:flex;flex-direction:column;gap:8px;">
+		  <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">Mode</span><span id="s-mode" class="warning">PAPER</span></div>
+		  <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">Direction</span><span id="s-dir" class="accent">BOTH</span></div>
+		  <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">Pairs Active</span><span class="accent" id="s-pairs">0</span></div>
+		  <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">Ticks</span><span class="accent" id="s-ticks">0</span></div>
+		</div>
+	  </div>
+	</div>
+
+	<div class="grid-4" style="margin-bottom:16px;">
+	  <div class="card">
+		<div class="card-title">🛡️ Signal Rejections</div>
+		<div style="display:flex;flex-direction:column;gap:8px;">
+		  <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">RSI Filter</span><span class="warning" id="rej-rsi">0</span></div>
+		  <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">EMA Filter</span><span class="warning" id="rej-ema">0</span></div>
+		  <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">Direction Limit</span><span class="warning" id="rej-dir">0</span></div>
+		  <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">Dedup/Open</span><span class="warning" id="rej-dedup">0</span></div>
+		</div>
+	  </div>
+	</div>
 
     <!-- Pair Performance Table -->
     <div class="card">
@@ -1353,6 +1365,13 @@ function updateStats() {
   setText('s-dir', state.effective_direction || state.config?.trade_direction || '—');
   setText('s-pairs', state.active_symbols_count || 0);
   setText('s-ticks', state.tick_count || 0);
+
+  if (state.rejection_counters) {
+    setText('rej-rsi', state.rejection_counters["RSI Filter"] || 0);
+    setText('rej-ema', state.rejection_counters["EMA Filter"] || 0);
+    setText('rej-dir', state.rejection_counters["Direction"] || 0);
+    setText('rej-dedup', state.rejection_counters["Dedup/Open"] || 0);
+  }
 }
 
 function updateEquityChart() {
