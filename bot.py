@@ -870,28 +870,27 @@ class MarketDataProvider:
     _candle_fetch_interval: float = 180.0  # new 3-min bar every 180s
 
     def _fetch_real_prices(self) -> dict:
-        """Fetch prices only for tracked universe symbols."""
-        import urllib.request, json as _json, urllib.parse
+        """Fetch all market prices in one request to avoid URL encoding issues."""
+        import urllib.request, json as _json
         symbols = self.get_all_symbols()
         if not symbols:
             return {}
 
-        all_prices = {}
-        # Binance limits ?symbols= to 100 items per request, so we chunk them
-        for i in range(0, len(symbols), 100):
-            chunk = symbols[i:i+100]
-            # Binance's API rejects URLs with encoded spaces. Strip them from the JSON array.
-            encoded = urllib.parse.quote(_json.dumps(chunk).replace(" ", ""))
-            url = f"https://api.binance.com/api/v3/ticker/price?symbols={encoded}"
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent": "SaiyanBot/1.0"})
-                with urllib.request.urlopen(req, timeout=4) as resp:
-                    data = _json.loads(resp.read().decode())
-                    for d in data:
-                        all_prices[d["symbol"]] = float(d["price"])
-            except Exception as e:
-                log.debug(f"Price fetch failed for chunk {i}: {e}")
-        return all_prices
+        symbols_set = set(symbols)
+        try:
+            # Omitting the 'symbols' parameter returns the entire market (Weight: 4).
+            # This completely bypasses Binance's strict array URL-encoding rules 
+            # which were causing silent API rejections.
+            url = "https://api.binance.com/api/v3/ticker/price"
+            req = urllib.request.Request(url, headers={"User-Agent": "SaiyanBot/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = _json.loads(resp.read().decode())
+                
+            # Filter and return only our tracked symbols
+            return {d["symbol"]: float(d["price"]) for d in data if d["symbol"] in symbols_set}
+        except Exception as e:
+            log.error(f"Global price fetch failed: {e}")
+            return {}
 
     def _refresh_latest_candles(self):
         """
