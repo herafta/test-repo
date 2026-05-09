@@ -877,12 +877,18 @@ class MarketDataProvider:
             if not symbols:
                 return {}
 
-            encoded = urllib.parse.quote(_json.dumps(symbols))
-            url = f"https://api.binance.com/api/v3/ticker/price?symbols={encoded}"
-            req = urllib.request.Request(url, headers={"User-Agent": "SaiyanBot/1.0"})
-            with urllib.request.urlopen(req, timeout=4) as resp:
-                data = _json.loads(resp.read().decode())
-            return {d["symbol"]: float(d["price"]) for d in data}
+            all_prices = {}
+            # Binance limits ?symbols= to 100 items per request, so we chunk them
+            for i in range(0, len(symbols), 100):
+                chunk = symbols[i:i+100]
+                encoded = urllib.parse.quote(_json.dumps(chunk))
+                url = f"https://api.binance.com/api/v3/ticker/price?symbols={encoded}"
+                req = urllib.request.Request(url, headers={"User-Agent": "SaiyanBot/1.0"})
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    data = _json.loads(resp.read().decode())
+                    for d in data:
+                        all_prices[d["symbol"]] = float(d["price"])
+            return all_prices
         except Exception as e:
             log.debug(f"Price fetch failed: {e}")
             return {}
