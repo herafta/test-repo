@@ -1482,8 +1482,10 @@ class SaiyanBot:
         # Restore trade counter to avoid ID collisions
         all_ids = [t.id for t in closed_t] + [t.id for t in open_t.values()]
         if all_ids:
-            max_num = max(int(i[1:]) for i in all_ids if i[1:].isdigit())
-            self.trade_manager._trade_counter = max_num
+            # Extract the counter portion after the underscore (e.g., '1' from 'T177828536497_1')
+            valid_nums = [int(i.split('_')[-1]) for i in all_ids if '_' in i and i.split('_')[-1].isdigit()]
+            if valid_nums:
+                self.trade_manager._trade_counter = max(valid_nums)
         # Restore equity curve
         self.equity_curve = deque(db_load_equity(), maxlen=500)
 
