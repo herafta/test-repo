@@ -1106,29 +1106,36 @@ class SignalEngine:
     def _resample(self, candles: list, mult: int, mode: str = "close") -> list:
         if mult <= 1:
             return [c.close if mode == "close" else c.open for c in candles]
-        
+
         out = []
         tf_sec = (candles[1].timestamp - candles[0].timestamp) if len(candles) > 1 else 180.0
         htf_sec = tf_sec * mult
-        last_val = None
         current_htf_start = None
-        chunk = []
-        
+        chunk_open = None   # first value of current HTF bucket
+        last_close = None   # close of the most recent COMPLETED HTF bucket
+
         for c in candles:
             val = c.close if mode == "close" else c.open
             htf_start = (c.timestamp // htf_sec) * htf_sec
-            
+
             if current_htf_start is None:
                 current_htf_start = htf_start
-            
+                chunk_open = val
+
             if htf_start != current_htf_start:
-                last_val = chunk[-1] if mode == "close" else chunk[0]
+                # bucket just closed — its last seen close becomes last_close
+                # (we approximate: out[-1] for that bucket already held its running close)
+                last_close = out[-1] if out else val
                 current_htf_start = htf_start
-                chunk = []
-            
-            chunk.append(val)
-            out.append(last_val if last_val is not None else val)
-            
+                chunk_open = val
+
+            if mode == "open":
+                # Open of current HTF bar = first value seen in this bucket
+                out.append(chunk_open)
+            else:
+                # Close of current HTF bar = most recent value in this bucket (running)
+                out.append(val)
+
         return out
 
 
@@ -1415,6 +1422,12 @@ class SaiyanBot:
         self.equity_curve: deque = deque(maxlen=500)
         self._last_regime_update = 0
         self._last_pair_refresh = 0
+        self.rejection_counters: dict = {
+            "Dedup/Open": 0,
+            "RSI Filter": 0,
+            "EMA Filter": 0,
+            "Direction": 0
+        }
 
     def _refresh_active_symbols(self):
         try:
@@ -1574,15 +1587,20 @@ class SaiyanBot:
             return
 
         signal = self.signal_engine.generate_signal(candles)
+        if signal != 0:
+            log.info(f"[SIGNAL] {symbol} signal={signal} regime={self.regime} price={self.data_provider.get_price(symbol):.6f}")
         if signal == 0:
-            if state:
-                state.prev_signal = 0
             return
 
-        # Deduplicate: don't re-enter on the same live position signal
-        if state and signal == state.prev_signal:
-            if any(t.symbol == symbol for t in self.trade_manager.open_trades.values()):
-                return
+        # Deduplicate: don't re-enter on the same signal while the position is still open.
+        # Once the position is closed, allow a fresh entry on the next crossover.
+        has_open = any(t.symbol == symbol for t in self.trade_manager.open_trades.values())
+        if state and signal == state.prev_signal and has_open:
+            self.rejection_counters["Dedup/Open"] += 1
+            return
+        # Reset prev_signal once the trade is gone so future identical signals can re-enter
+        if state and not has_open and state.prev_signal != 0:
+            state.prev_signal = 0
 
         # ── RSI confirmation filter ───────────────────────────────────────────
         closes = [c.close for c in candles]
@@ -1592,15 +1610,13 @@ class SaiyanBot:
         mean_rev_regime = self.regime in ("MEAN_REVERSION", "SIDEWAYS")
         if mean_rev_regime:
             # Mean reversion: long only from oversold pressure, short only from overbought
-            if signal == 1  and rsi > 45:   # long only when RSI confirms oversold bias
-                return
-            if signal == -1 and rsi < 55:   # short only when RSI confirms overbought bias
+            if (signal == 1 and rsi > 45) or (signal == -1 and rsi < 55):
+                self.rejection_counters["RSI Filter"] += 1
                 return
         else:
             # Trend-following: don't chase extremes
-            if signal == 1  and rsi > 72:
-                return
-            if signal == -1 and rsi < 28:
+            if (signal == 1 and rsi > 72) or (signal == -1 and rsi < 28):
+                self.rejection_counters["RSI Filter"] += 1
                 return
 
         # ── EMA trend alignment (regime-aware) ───────────────────────────────
@@ -1609,15 +1625,18 @@ class SaiyanBot:
         if ema_val:
             if mean_rev_regime:
                 # Mean reversion: price must be displaced from EMA to have reversion room
-                if signal == 1  and closes[-1] >= ema_val:      # long only when price is below EMA
-                    return
-                if signal == -1 and closes[-1] <= ema_val:      # short only when price is above EMA
+                if (signal == 1 and closes[-1] >= ema_val) or (signal == -1 and closes[-1] <= ema_val):
+                    self.rejection_counters["EMA Filter"] += 1
                     return
             else:
-                # Trend-following: don't fight momentum
-                if signal == 1  and closes[-1] < ema_val * 0.995:
-                    return
-                if signal == -1 and closes[-1] > ema_val * 1.005:
+                # Trend-following: don't fight strong counter-momentum.
+                # Use ATR-relative buffer instead of fixed % so the filter
+                # adapts to each pair's volatility and doesn't reject
+                # signals that occur exactly at the EMA cross.
+                atr_val = Indicators.atr(candles, 14)
+                buffer = atr_val * 0.5 if atr_val > 0 else 0
+                if (signal == 1 and closes[-1] < ema_val - buffer) or (signal == -1 and closes[-1] > ema_val + buffer):
+                    self.rejection_counters["EMA Filter"] += 1
                     return
 
         price = self.data_provider.get_price(symbol)
@@ -1625,9 +1644,8 @@ class SaiyanBot:
             return
 
         side = "long" if signal == 1 else "short"
-        if direction == "LONG"  and side != "long":
-            return
-        if direction == "SHORT" and side != "short":
+        if (direction == "LONG" and side != "long") or (direction == "SHORT" and side != "short"):
+            self.rejection_counters["Direction"] += 1
             return
 
         trade = self.trade_manager.open_trade(symbol, side, price, self.regime)
@@ -1787,6 +1805,7 @@ class SaiyanBot:
             "active_symbols_count": len(self.active_symbols),
             "effective_direction": self._effective_direction(),
             "regime_params": REGIME_PARAMS,
+            "rejection_counters": self.rejection_counters,
         }
 
     # Keys that count as manual risk overrides — lock params when any of these arrive
