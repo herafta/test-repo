@@ -871,27 +871,27 @@ class MarketDataProvider:
 
     def _fetch_real_prices(self) -> dict:
         """Fetch prices only for tracked universe symbols."""
-        try:
-            import urllib.request, json as _json, urllib.parse
-            symbols = self.get_all_symbols()
-            if not symbols:
-                return {}
+        import urllib.request, json as _json, urllib.parse
+        symbols = self.get_all_symbols()
+        if not symbols:
+            return {}
 
-            all_prices = {}
-            # Binance limits ?symbols= to 100 items per request, so we chunk them
-            for i in range(0, len(symbols), 100):
-                chunk = symbols[i:i+100]
-                encoded = urllib.parse.quote(_json.dumps(chunk))
-                url = f"https://api.binance.com/api/v3/ticker/price?symbols={encoded}"
+        all_prices = {}
+        # Binance limits ?symbols= to 100 items per request, so we chunk them
+        for i in range(0, len(symbols), 100):
+            chunk = symbols[i:i+100]
+            # Binance's API rejects URLs with encoded spaces. Strip them from the JSON array.
+            encoded = urllib.parse.quote(_json.dumps(chunk).replace(" ", ""))
+            url = f"https://api.binance.com/api/v3/ticker/price?symbols={encoded}"
+            try:
                 req = urllib.request.Request(url, headers={"User-Agent": "SaiyanBot/1.0"})
                 with urllib.request.urlopen(req, timeout=4) as resp:
                     data = _json.loads(resp.read().decode())
                     for d in data:
                         all_prices[d["symbol"]] = float(d["price"])
-            return all_prices
-        except Exception as e:
-            log.debug(f"Price fetch failed: {e}")
-            return {}
+            except Exception as e:
+                log.debug(f"Price fetch failed for chunk {i}: {e}")
+        return all_prices
 
     def _refresh_latest_candles(self):
         """
@@ -931,9 +931,8 @@ class MarketDataProvider:
 
         # ── spot price refresh ────────────────────────────────────────────────
         if now - self._last_price_fetch >= self._price_fetch_interval:
+            self._last_price_fetch = now  # Always update to prevent rapid-fire retries on failure
             real_prices = self._fetch_real_prices()
-            if real_prices:
-                self._last_price_fetch = now
 
         # ── periodic candle bar refresh ───────────────────────────────────────
         if now - self._last_candle_fetch >= self._candle_fetch_interval:
