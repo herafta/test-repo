@@ -1669,10 +1669,26 @@ class SaiyanBot:
             self.rejection_counters["Direction"] += 1
             return
 
-        # Calculate 15m SMA 50 for the dynamic stoploss and HTF trend filter
-        htf_closes = self.signal_engine._resample(candles, 5, mode="close")
-        if len(htf_closes) >= 50:
-            sma_50_15m = sum(htf_closes[-50:]) / 50.0
+        # Calculate true 15m SMA 50 by properly downsampling 3m candles
+        htf_15m_closes = []
+        current_bucket = None
+        running_close = None
+        for c in candles:
+            # Group into 15-minute chunks (900 seconds)
+            bucket = int(c.timestamp // 900) * 900
+            if current_bucket is None:
+                current_bucket = bucket
+            
+            if bucket != current_bucket:
+                htf_15m_closes.append(running_close)
+                current_bucket = bucket
+            running_close = c.close
+            
+        if running_close is not None:
+            htf_15m_closes.append(running_close)
+
+        if len(htf_15m_closes) >= 50:
+            sma_50_15m = sum(htf_15m_closes[-50:]) / 50.0
         else:
             sma_50_15m = 0.0
 
