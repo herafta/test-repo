@@ -503,7 +503,8 @@ class Indicators:
         slope_ratio = positive_slopes / 20
 
         # Whipsaw / Consolidation override
-        if crosses >= 3:
+        # Increased cross threshold to 5 because 3m timeframes are noisy and easily hit 3 crosses even during pullbacks
+        if crosses >= 5:
             if vol_pct > 5.0:
                 return "HIGH_VOLATILITY"
             elif vol_pct < 1.5:
@@ -1615,8 +1616,9 @@ class SaiyanBot:
             return
         mean_rev_regime = self.regime in ("MEAN_REVERSION", "SIDEWAYS")
         if mean_rev_regime:
-            # Mean reversion: long only from oversold pressure, short only from overbought
-            if (signal == 1 and rsi > 45) or (signal == -1 and rsi < 55):
+            # In ranging markets, OCC crosses happen mid-range. 
+            # Reject longs if already overbought, reject shorts if already oversold.
+            if (signal == 1 and rsi > 60) or (signal == -1 and rsi < 40):
                 self.rejection_counters["RSI Filter"] += 1
                 return
         else:
@@ -1629,9 +1631,12 @@ class SaiyanBot:
         ema50 = Indicators.ema(closes, 50)
         ema_val = next((v for v in reversed(ema50) if v), None)
         if ema_val:
+            atr_val = Indicators.atr(candles, 14)
             if mean_rev_regime:
-                # Mean reversion: price must be displaced from EMA to have reversion room
-                if (signal == 1 and closes[-1] >= ema_val) or (signal == -1 and closes[-1] <= ema_val):
+                # In a ranging market, the EMA is flat. Allow crossing the EMA. 
+                # Just prevent entry if price is already completely extended past it.
+                buffer = atr_val * 1.5 if atr_val > 0 else 0
+                if (signal == 1 and closes[-1] > ema_val + buffer) or (signal == -1 and closes[-1] < ema_val - buffer):
                     self.rejection_counters["EMA Filter"] += 1
                     return
             else:
@@ -1639,7 +1644,6 @@ class SaiyanBot:
                 # Use ATR-relative buffer instead of fixed % so the filter
                 # adapts to each pair's volatility and doesn't reject
                 # signals that occur exactly at the EMA cross.
-                atr_val = Indicators.atr(candles, 14)
                 buffer = atr_val * 0.5 if atr_val > 0 else 0
                 if (signal == 1 and closes[-1] < ema_val - buffer) or (signal == -1 and closes[-1] > ema_val + buffer):
                     self.rejection_counters["EMA Filter"] += 1
