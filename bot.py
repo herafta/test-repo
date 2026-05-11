@@ -1170,7 +1170,7 @@ class TradeManager:
             return open_count < self.config.max_open_trades and not already
 
     def open_trade(self, symbol: str, side: str, current_price: float,
-                   regime: str) -> Optional[Trade]:
+                   regime: str, sma_50_15m: float = 0.0) -> Optional[Trade]:
         balance = self.exchange.get_balance()
         usdt_amt = balance * self.config.equity_pct / 100
 
@@ -1182,10 +1182,21 @@ class TradeManager:
         price = result["avg_price"]
         mult  = 1 if side == "long" else -1
 
-        tp1 = price * (1 + mult * self.config.tp1_pct / 100)
-        tp2 = price * (1 + mult * self.config.tp2_pct / 100)
-        tp3 = price * (1 + mult * self.config.tp3_pct / 100)
-        sl  = price * (1 - mult * self.config.sl_pct  / 100)
+        # Dynamic SL with fallback to configured percentage if SMA is misaligned with trade direction
+        sl = sma_50_15m
+        if sl <= 0.0 or (side == "long" and sl >= price) or (side == "short" and sl <= price):
+            sl = price * (1 - mult * self.config.sl_pct / 100)
+            
+        risk_dist = abs(price - sl)
+        
+        # Calculate Risk/Reward multipliers dynamically based on user config
+        rr_tp1 = self.config.tp1_pct / self.config.sl_pct if self.config.sl_pct > 0 else 1.0
+        rr_tp2 = self.config.tp2_pct / self.config.sl_pct if self.config.sl_pct > 0 else 1.5
+        rr_tp3 = self.config.tp3_pct / self.config.sl_pct if self.config.sl_pct > 0 else 2.0
+
+        tp1 = price + (mult * risk_dist * rr_tp1)
+        tp2 = price + (mult * risk_dist * rr_tp2)
+        tp3 = price + (mult * risk_dist * rr_tp3)
 
         trade = Trade(
             id=self._new_id(),
@@ -1589,7 +1600,7 @@ class SaiyanBot:
         if time.time() < _BOT_COOLDOWN_UNTIL.get(symbol, 0):
             return
 
-        candles = self.data_provider.get_candles(symbol, 150)
+        candles = self.data_provider.get_candles(symbol, 300)
         if len(candles) < 50:
             return
 
@@ -1658,7 +1669,14 @@ class SaiyanBot:
             self.rejection_counters["Direction"] += 1
             return
 
-        trade = self.trade_manager.open_trade(symbol, side, price, self.regime)
+        # Calculate 15m SMA 50 for the dynamic stoploss
+        htf_closes = self.signal_engine._resample(candles, 5, mode="close")
+        if len(htf_closes) >= 50:
+            sma_50_15m = sum(htf_closes[-50:]) / 50.0
+        else:
+            sma_50_15m = 0.0
+
+        trade = self.trade_manager.open_trade(symbol, side, price, self.regime, sma_50_15m)
         if trade is None:
             return
 
