@@ -1669,12 +1669,18 @@ class SaiyanBot:
             self.rejection_counters["Direction"] += 1
             return
 
-        # Calculate 15m SMA 50 for the dynamic stoploss
+        # Calculate 15m SMA 50 for the dynamic stoploss and HTF trend filter
         htf_closes = self.signal_engine._resample(candles, 5, mode="close")
         if len(htf_closes) >= 50:
             sma_50_15m = sum(htf_closes[-50:]) / 50.0
         else:
             sma_50_15m = 0.0
+
+        # HTF Structural Filter: Reject trades fighting the 15m trend
+        if sma_50_15m > 0:
+            if (side == "long" and price < sma_50_15m) or (side == "short" and price > sma_50_15m):
+                self.rejection_counters["HTF SMA Filter"] = self.rejection_counters.get("HTF SMA Filter", 0) + 1
+                return
 
         trade = self.trade_manager.open_trade(symbol, side, price, self.regime, sma_50_15m)
         if trade is None:
