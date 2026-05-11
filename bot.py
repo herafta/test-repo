@@ -1182,9 +1182,12 @@ class TradeManager:
         price = result["avg_price"]
         mult  = 1 if side == "long" else -1
 
-        # Dynamic SL with fallback to configured percentage if SMA is misaligned with trade direction
+        # Dynamic SL with fallback to configured percentage if SMA is misaligned or too tight
         sl = sma_50_15m
-        if sl <= 0.0 or (side == "long" and sl >= price) or (side == "short" and sl <= price):
+        sl_dist_pct = abs(price - sl) / price * 100 if price > 0 else 0
+        
+        # Enforce a minimum SL distance of 0.6% to prevent immediate stop-outs from market noise
+        if sl <= 0.0 or (side == "long" and sl >= price) or (side == "short" and sl <= price) or sl_dist_pct < 0.6:
             sl = price * (1 - mult * self.config.sl_pct / 100)
             
         risk_dist = abs(price - sl)
