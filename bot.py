@@ -1416,6 +1416,7 @@ class SaiyanBot:
     def __init__(self, config: BotConfig = None):
         self.config = config or BotConfig()
         self._running = False
+        self._session_id = 0
         self._lock = threading.Lock()
 
         # Exchange
@@ -1468,9 +1469,9 @@ class SaiyanBot:
         except Exception as e:
             log.debug(f"Pair refresh failed: {e}")
 
-    def _tick_loop_wrapper(self):
+    def _tick_loop_wrapper(self, session_id):
         """Wrapper so tick loop is always defined on the class."""
-        while self._running:
+        while self._running and self._session_id == session_id:
             try:
                 self.data_provider.tick()
             except Exception as e:
@@ -1479,6 +1480,8 @@ class SaiyanBot:
 
     def start(self):
         self._running = True
+        self._session_id += 1
+        current_session = self._session_id
         log.info("🚀 SaiyanBot starting...")
 
         # Init DB and restore prior session
@@ -1510,7 +1513,7 @@ class SaiyanBot:
             self.last_trade_direction = latest_trade.side
 
         # Start data feeds immediately — bootstrap runs in background
-        threading.Thread(target=self._tick_loop_wrapper, daemon=True).start()
+        threading.Thread(target=self._tick_loop_wrapper, args=(current_session,), daemon=True).start()
 
         # Wait up to 90s for universe discovery + at least 10 kline bootstraps
         log.info("Waiting for live universe discovery + kline bootstrap...")
@@ -1540,16 +1543,16 @@ class SaiyanBot:
         for sym in self.active_symbols:
             self.symbol_states[sym] = SymbolState(symbol=sym)
 
-        threading.Thread(target=self._main_loop, daemon=True).start()
-        threading.Thread(target=self._ai_loop, daemon=True).start()
+        threading.Thread(target=self._main_loop, args=(current_session,), daemon=True).start()
+        threading.Thread(target=self._ai_loop, args=(current_session,), daemon=True).start()
 
     def stop(self):
         self._running = False
         log.info("Bot stopped")
 
-    def _main_loop(self):
+    def _main_loop(self, session_id):
         """Main strategy loop: runs every ~5s"""
-        while self._running:
+        while self._running and self._session_id == session_id:
             try:
                 self._process_cycle()
                 self.tick_count += 1
@@ -1765,11 +1768,13 @@ class SaiyanBot:
                 "trade_direction", self.config.trade_direction)
         return self.config.trade_direction
 
-    def _ai_loop(self):
+    def _ai_loop(self, session_id):
         """Generate AI-like recommendations every 2 minutes"""
-        while self._running:
+        while self._running and self._session_id == session_id:
             time.sleep(120)
-            self._generate_recommendations()
+            # Inner check ensures it doesn't execute if stopped during the 2 min sleep
+            if self._running and self._session_id == session_id:
+                self._generate_recommendations()
 
     def _generate_recommendations(self):
         stats = self.trade_manager.get_stats()
