@@ -1436,6 +1436,7 @@ class SaiyanBot:
         self.tick_count: int = 0
         self.start_time: str = datetime.utcnow().isoformat()
         self.ai_recommendations: list = []
+        self.last_trade_direction: Optional[str] = None
 
         # Equity curve (timestamp, equity)
         self.equity_curve: deque = deque(maxlen=500)
@@ -1501,6 +1502,12 @@ class SaiyanBot:
                 self.trade_manager._trade_counter = max(valid_nums)
         # Restore equity curve
         self.equity_curve = deque(db_load_equity(), maxlen=500)
+        
+        # Restore last trade direction for strict alternation
+        all_trades = list(self.trade_manager.open_trades.values()) + self.trade_manager.closed_trades
+        if all_trades:
+            latest_trade = max(all_trades, key=lambda t: t.entry_time)
+            self.last_trade_direction = latest_trade.side
 
         # Start data feeds immediately — bootstrap runs in background
         threading.Thread(target=self._tick_loop_wrapper, daemon=True).start()
@@ -1668,11 +1675,18 @@ class SaiyanBot:
             return
 
         side = "long" if signal == 1 else "short"
+        
+        # Strict Alternation Filter (Alpha Neutrality)
+        # Only enforces alternation if the bot is permitted to trade BOTH directions.
+        if direction == "BOTH" and side == self.last_trade_direction:
+            self.rejection_counters["Alternation Filter"] = self.rejection_counters.get("Alternation Filter", 0) + 1
+            return
+            
         if (direction == "LONG" and side != "long") or (direction == "SHORT" and side != "short"):
             self.rejection_counters["Direction"] += 1
             return
 
-        # Calculate true 15m SMA 50 by properly downsampling 3m candles
+        # Calculate 15m SMA 50 for the dynamic stoploss and HTF trend filter
         htf_15m_closes = []
         current_bucket = None
         running_close = None
@@ -1704,6 +1718,8 @@ class SaiyanBot:
         trade = self.trade_manager.open_trade(symbol, side, price, self.regime, sma_50_15m)
         if trade is None:
             return
+
+        self.last_trade_direction = side
 
         # Track signal to prevent re-entry on the same HTF crossover
         if state:
