@@ -818,6 +818,7 @@ input:checked + .slider::before { transform: translateX(20px); background: var(-
 		  <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">Direction Limit</span><span class="warning" id="rej-dir">0</span></div>
 		  <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">Dedup/Open</span><span class="warning" id="rej-dedup">0</span></div>
 		  <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">HTF SMA Filter</span><span class="warning" id="rej-htf-sma">0</span></div>
+		  <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">Alternation</span><span class="warning" id="rej-alt">0</span></div>
 		</div>
 	  </div>
 	</div>
@@ -1373,6 +1374,7 @@ function updateStats() {
     setText('rej-dir', state.rejection_counters["Direction"] || 0);
     setText('rej-dedup', state.rejection_counters["Dedup/Open"] || 0);
     setText('rej-htf-sma', state.rejection_counters["HTF SMA Filter"] || 0);
+    setText('rej-alt', state.rejection_counters["Alternation Filter"] || 0);
   }
 }
 
