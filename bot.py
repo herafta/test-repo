@@ -57,9 +57,11 @@ def db_init():
             tp1_hit         INTEGER DEFAULT 0,
             tp2_hit         INTEGER DEFAULT 0,
             tp3_hit         INTEGER DEFAULT 0,
-            regime_at_entry TEXT DEFAULT ''
+            regime_at_entry TEXT DEFAULT '',
+            initial_sl_dist REAL DEFAULT 0,
+            peak_price      REAL DEFAULT 0
         );
-
+        
         CREATE TABLE IF NOT EXISTS equity_curve (
             id       INTEGER PRIMARY KEY AUTOINCREMENT,
             ts       TEXT NOT NULL,
@@ -76,6 +78,16 @@ def db_init():
         CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
         CREATE INDEX IF NOT EXISTS idx_equity_ts     ON equity_curve(ts);
     """)
+    
+    # Securely handle the ALTER TABLE if columns already exist
+    try:
+        cur.executescript("""
+            ALTER TABLE trades ADD COLUMN initial_sl_dist REAL DEFAULT 0;
+            ALTER TABLE trades ADD COLUMN peak_price REAL DEFAULT 0;
+        """)
+    except sqlite3.OperationalError:
+        pass  # Columns already exist, safe to continue
+        
     con.commit()
     con.close()
     log.info(f"SQLite DB initialised at {DB_PATH}")
@@ -89,8 +101,8 @@ def db_upsert_trade(trade: "Trade"):
             INSERT INTO trades
                 (id,symbol,side,entry_price,entry_time,qty,
                  tp1,tp2,tp3,sl,status,exit_price,exit_time,
-                 exit_reason,realized_pnl,tp1_hit,tp2_hit,tp3_hit,regime_at_entry)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 exit_reason,realized_pnl,tp1_hit,tp2_hit,tp3_hit,regime_at_entry,initial_sl_dist,peak_price)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 qty           = excluded.qty,
                 sl            = excluded.sl,
@@ -101,7 +113,9 @@ def db_upsert_trade(trade: "Trade"):
                 realized_pnl  = excluded.realized_pnl,
                 tp1_hit       = excluded.tp1_hit,
                 tp2_hit       = excluded.tp2_hit,
-                tp3_hit       = excluded.tp3_hit
+                tp3_hit       = excluded.tp3_hit,
+                initial_sl_dist = excluded.initial_sl_dist,
+                peak_price    = excluded.peak_price
         """, (
             trade.id, trade.symbol, trade.side,
             trade.entry_price, trade.entry_time, trade.qty,
@@ -109,7 +123,7 @@ def db_upsert_trade(trade: "Trade"):
             trade.status, trade.exit_price, trade.exit_time,
             trade.exit_reason, trade.realized_pnl,
             int(trade.tp1_hit), int(trade.tp2_hit), int(trade.tp3_hit),
-            trade.regime_at_entry,
+            trade.regime_at_entry, trade.initial_sl_dist, trade.peak_price,
         ))
         con.commit()
         con.close()
@@ -154,6 +168,8 @@ def db_load_trades() -> tuple[dict, list]:
                 tp1_hit=bool(d["tp1_hit"]), tp2_hit=bool(d["tp2_hit"]),
                 tp3_hit=bool(d["tp3_hit"]),
                 regime_at_entry=d["regime_at_entry"] or "",
+                initial_sl_dist=d.get("initial_sl_dist", 0.0) or 0.0,
+                peak_price=d.get("peak_price", 0.0) or 0.0,
             )
             if t.status == "open":
                 open_trades[t.id] = t
@@ -260,6 +276,8 @@ class Trade:
     regime_at_entry: str = ""
     current_price: float = 0.0
     initial_qty: float = 0.0
+    initial_sl_dist: float = 0.0
+    peak_price: float = 0.0
 
     @property
     def unrealized_pnl(self) -> float:
@@ -1213,6 +1231,8 @@ class TradeManager:
             regime_at_entry=regime,
             current_price=price,
             initial_qty=qty,
+            initial_sl_dist=risk_dist,
+            peak_price=price,
         )
         with self._lock:
             self.open_trades[trade.id] = trade
@@ -1227,6 +1247,25 @@ class TradeManager:
 
         trade.current_price = current_price
         side = trade.side
+
+        # ── High Water Mark Trailing Stop Logic ──────────────────────────────
+        if side == "long":
+            if current_price > trade.peak_price:
+                trade.peak_price = current_price
+                if current_price > trade.entry_price:
+                    new_sl = trade.peak_price - trade.initial_sl_dist
+                    if new_sl > trade.sl:  # Strict one-way ratchet
+                        trade.sl = new_sl
+                        db_upsert_trade(trade)
+        elif side == "short":
+            if current_price < trade.peak_price:
+                trade.peak_price = current_price
+                if current_price < trade.entry_price:
+                    new_sl = trade.peak_price + trade.initial_sl_dist
+                    if new_sl < trade.sl:  # Strict one-way ratchet
+                        trade.sl = new_sl
+                        db_upsert_trade(trade)
+        # ─────────────────────────────────────────────────────────────────────
 
         def hit_tp(level: float) -> bool:
             return (side == "long"  and current_price >= level) or \
