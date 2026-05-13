@@ -218,6 +218,7 @@ class BotConfig:
     tp2_pct: float = 1.2
     tp3_pct: float = 1.6
     sl_pct:  float = 0.8
+    sl_trail_buffer_pct: float = 2.0  # Extra breathing room added to the trailing distance
     tp1_qty: float = 75.0
     tp2_qty: float = 20.0
     tp3_qty: float = 5.0
@@ -1249,11 +1250,15 @@ class TradeManager:
         side = trade.side
 
         # ── High Water Mark Trailing Stop Logic ──────────────────────────────
+        # Calculate the extra buffer distance to keep the SL from hugging the price too tightly
+        buffer_dist = trade.entry_price * (self.config.sl_trail_buffer_pct / 100.0)
+        
         if side == "long":
             if current_price > trade.peak_price:
                 trade.peak_price = current_price
                 if current_price > trade.entry_price:
-                    new_sl = trade.peak_price - trade.initial_sl_dist
+                    # Trail by the initial distance plus the extra buffer
+                    new_sl = trade.peak_price - (trade.initial_sl_dist + buffer_dist)
                     if new_sl > trade.sl:  # Strict one-way ratchet
                         trade.sl = new_sl
                         db_upsert_trade(trade)
@@ -1261,7 +1266,8 @@ class TradeManager:
             if current_price < trade.peak_price:
                 trade.peak_price = current_price
                 if current_price < trade.entry_price:
-                    new_sl = trade.peak_price + trade.initial_sl_dist
+                    # Trail by the initial distance plus the extra buffer
+                    new_sl = trade.peak_price + (trade.initial_sl_dist + buffer_dist)
                     if new_sl < trade.sl:  # Strict one-way ratchet
                         trade.sl = new_sl
                         db_upsert_trade(trade)
