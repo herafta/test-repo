@@ -746,8 +746,8 @@ class MarketDataProvider:
         """
         import urllib.request, json as _json
 
-        # ── 1. Get all active USDT spot symbols ──────────────────────────────
-        url = "https://api.binance.com/api/v3/exchangeInfo"
+        # ── 1. Get all active USDT futures symbols ───────────────────────────
+        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
         req = urllib.request.Request(url, headers={"User-Agent": "SaiyanBot/1.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             info = _json.loads(resp.read().decode())
@@ -756,11 +756,11 @@ class MarketDataProvider:
         for s in info["symbols"]:
             if (s["quoteAsset"] == "USDT"
                     and s["status"] == "TRADING"
-                    and s["isSpotTradingAllowed"]):
+                    and s.get("contractType") == "PERPETUAL"):
                 valid_symbols.add(s["symbol"])
 
         # ── 2. Get 24h tickers for volume + price ────────────────────────────
-        url2 = "https://api.binance.com/api/v3/ticker/24hr"
+        url2 = "https://fapi.binance.com/fapi/v1/ticker/24hr"
         req2 = urllib.request.Request(url2, headers={"User-Agent": "SaiyanBot/1.0"})
         with urllib.request.urlopen(req2, timeout=10) as resp2:
             tickers = _json.loads(resp2.read().decode())
@@ -846,7 +846,7 @@ class MarketDataProvider:
         params = urllib.parse.urlencode({
             "symbol": symbol, "interval": interval, "limit": limit
         })
-        url = f"https://api.binance.com/api/v3/klines?{params}"
+        url = f"https://fapi.binance.com/fapi/v1/klines?{params}"
         req = urllib.request.Request(url, headers={"User-Agent": "SaiyanBot/1.0"})
         with urllib.request.urlopen(req, timeout=8) as resp:
             data = _json.loads(resp.read().decode())
@@ -882,7 +882,7 @@ class MarketDataProvider:
             # Omitting the 'symbols' parameter returns the entire market (Weight: 4).
             # This completely bypasses Binance's strict array URL-encoding rules 
             # which were causing silent API rejections.
-            url = "https://api.binance.com/api/v3/ticker/price"
+            url = "https://fapi.binance.com/fapi/v1/ticker/price"
             req = urllib.request.Request(url, headers={"User-Agent": "SaiyanBot/1.0"})
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = _json.loads(resp.read().decode())
