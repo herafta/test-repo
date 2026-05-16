@@ -1190,7 +1190,12 @@ class TradeManager:
         if sl <= 0.0 or (side == "long" and sl >= price) or (side == "short" and sl <= price) or sl_dist_pct < 0.6:
             sl = price * (1 - mult * self.config.sl_pct / 100)
             
-        risk_dist = abs(price - sl)
+        # Enforce a maximum SL distance to prevent TPs from being pushed into unrealistic territories
+        max_dist = price * (self.config.sl_pct * 2.5 / 100)
+        risk_dist = min(abs(price - sl), max_dist)
+        
+        # Recalculate SL based on clamped risk distance to align with TPs
+        sl = price - (mult * risk_dist)
         
         # Calculate Risk/Reward multipliers dynamically based on user config
         rr_tp1 = self.config.tp1_pct / self.config.sl_pct if self.config.sl_pct > 0 else 1.0
@@ -1245,7 +1250,8 @@ class TradeManager:
                                             current_price, side)
             trade.realized_pnl += pnl
             trade.qty -= close_qty
-            trade.sl = trade.entry_price
+            # Move SL to breakeven + a 0.12% buffer to cover round-trip exchange fees and slippage
+            trade.sl = trade.entry_price * (1 + (1 if side == "long" else -1) * 0.0012)
             db_upsert_trade(trade)
             log.info(f"TP1 hit {trade.symbol} pnl={pnl:.4f} | SL moved to BE")
 
@@ -1613,7 +1619,8 @@ class SaiyanBot:
         if time.time() < _BOT_COOLDOWN_UNTIL.get(symbol, 0):
             return
 
-        candles = self.data_provider.get_candles(symbol, 300)
+        # Fetch 400 candles to ensure a full 50-period 15m SMA buffer even with minor data gaps
+        candles = self.data_provider.get_candles(symbol, 400)
         if len(candles) < 50:
             return
 
@@ -1707,15 +1714,32 @@ class SaiyanBot:
         if running_close is not None:
             htf_15m_closes.append(running_close)
 
-        if len(htf_15m_closes) >= 50:
+        # ── Volume Confirmation Filter ───────────────────────────────────────
+        # Reject signals that occur on low volume (classic fakeout characteristic)
+        if len(candles) >= 20:
+            vol_sma20 = sum(c.volume for c in candles[-20:]) / 20.0
+            if vol_sma20 > 0 and candles[-1].volume < (vol_sma20 * 0.90):
+                self.rejection_counters["Volume Filter"] = self.rejection_counters.get("Volume Filter", 0) + 1
+                return
+
+        # ── HTF Structural & Slope Filter ────────────────────────────────────
+        if len(htf_15m_closes) >= 51:
             sma_50_15m = sum(htf_15m_closes[-50:]) / 50.0
+            sma_50_15m_prev = sum(htf_15m_closes[-51:-1]) / 50.0
         else:
             sma_50_15m = 0.0
+            sma_50_15m_prev = 0.0
 
-        # HTF Structural Filter: Reject trades fighting the 15m trend
-        if sma_50_15m > 0:
+        # Reject trades fighting the 15m trend direction (Slope) AND structure (Position)
+        if sma_50_15m > 0 and sma_50_15m_prev > 0:
+            # Check Structure: Is price on the wrong side of the HTF moving average?
             if (side == "long" and price < sma_50_15m) or (side == "short" and price > sma_50_15m):
                 self.rejection_counters["HTF SMA Filter"] = self.rejection_counters.get("HTF SMA Filter", 0) + 1
+                return
+                
+            # Check Slope: Is the HTF moving average actually pointing in our direction?
+            if (side == "long" and sma_50_15m <= sma_50_15m_prev) or (side == "short" and sma_50_15m >= sma_50_15m_prev):
+                self.rejection_counters["HTF Slope Filter"] = self.rejection_counters.get("HTF Slope Filter", 0) + 1
                 return
 
         trade = self.trade_manager.open_trade(symbol, side, price, self.regime, sma_50_15m)
