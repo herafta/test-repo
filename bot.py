@@ -1587,6 +1587,10 @@ class SaiyanBot:
             if price > 0:
                 self.trade_manager.update_trade(trade, price)
 
+        # Reset alternation state to neutral if there are no open positions in the pool
+        if not self.trade_manager.open_trades:
+            self.last_trade_direction = None
+
         # 4. Scan for new signals
         effective_direction = self._effective_direction()
         for sym in self.active_symbols:
