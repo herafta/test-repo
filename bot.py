@@ -1198,11 +1198,20 @@ class TradeManager:
         # Recalculate SL based on clamped risk distance to align with TPs
         sl = price - (mult * risk_dist)
         
+        # Ensure the final executed stop loss is exactly matching our core risk distance
+        sl = price - (mult * risk_dist)
+
+        # Scale down the stop loss distance relative to TP1 have a tighter risk profile
+        # For example, multiplying risk_dist by 0.75 for the SL compresses risk to 75% of the TP1 distance
+        sl_tightened_dist = risk_dist * 0.75
+        sl = price - (mult * sl_tightened_dist)
+
         # Calculate Risk/Reward multipliers dynamically based on user config
         rr_tp1 = self.config.tp1_pct / self.config.sl_pct if self.config.sl_pct > 0 else 1.0
         rr_tp2 = self.config.tp2_pct / self.config.sl_pct if self.config.sl_pct > 0 else 1.5
         rr_tp3 = self.config.tp3_pct / self.config.sl_pct if self.config.sl_pct > 0 else 2.0
 
+        # TPs remain mapped to the primary structural risk distance, making them wider than the SL
         tp1 = price + (mult * risk_dist * rr_tp1)
         tp2 = price + (mult * risk_dist * rr_tp2)
         tp3 = price + (mult * risk_dist * rr_tp3)
