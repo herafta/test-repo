@@ -512,13 +512,14 @@ class Indicators:
             else:
                 return "SIDEWAYS"
 
-        if trend_pct > 1.5 and slope_ratio > 0.65:
+        # Scaled thresholds adjusted for 3-minute timeframe volatility
+        if trend_pct > 0.15 and slope_ratio > 0.65:
             return "TRENDING_BULLISH"
-        elif trend_pct < -1.5 and slope_ratio < 0.35:
+        elif trend_pct < -0.15 and slope_ratio < 0.35:
             return "TRENDING_BEARISH"
-        elif vol_pct > 5.0:
+        elif vol_pct > 2.5:
             return "HIGH_VOLATILITY"
-        elif vol_pct < 1.5:
+        elif vol_pct < 0.4:
             return "MEAN_REVERSION"
         else:
             return "SIDEWAYS"
