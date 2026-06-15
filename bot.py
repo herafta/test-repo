@@ -1175,6 +1175,14 @@ class TradeManager:
         balance = self.exchange.get_balance()
         usdt_amt = balance * self.config.equity_pct / 100
 
+        # Asymmetric position sizing by regime
+        if regime in ("TRENDING_BULLISH", "TRENDING_BEARISH"):
+            pass  # Full size
+        elif regime == "SIDEWAYS":
+            usdt_amt *= 0.50  # Half size
+        elif regime == "MEAN_REVERSION":
+            usdt_amt *= 0.25  # Quarter size
+
         result = self.exchange.place_order(symbol, side, usdt_amt, current_price)
         if not result:
             return None
@@ -1204,6 +1212,11 @@ class TradeManager:
         # Scale down the stop loss distance relative to TP1 have a tighter risk profile
         # For example, multiplying risk_dist by 0.75 for the SL compresses risk to 75% of the TP1 distance
         sl_tightened_dist = risk_dist * 0.75
+        
+        # Tighten risk parameters for Mean Reversion: move SL closer to entry
+        if regime == "MEAN_REVERSION":
+            sl_tightened_dist = risk_dist * 0.40  # Considerably tighter stop to cut worst losses
+            
         sl = price - (mult * sl_tightened_dist)
 
         # Calculate Risk/Reward multipliers dynamically based on user config
@@ -1260,10 +1273,14 @@ class TradeManager:
                                             current_price, side)
             trade.realized_pnl += pnl
             trade.qty -= close_qty
-            # Move SL to breakeven + a 0.12% buffer to cover round-trip exchange fees and slippage
-            trade.sl = trade.entry_price * (1 + (1 if side == "long" else -1) * 0.0012)
-            db_upsert_trade(trade)
-            log.info(f"TP1 hit {trade.symbol} pnl={pnl:.4f} | SL moved to BE")
+            
+            if trade.qty <= 0.00001:  # Account for floating point precision and full exit configurations
+                self._close_trade(trade, current_price, "TP1_FULL")
+            else:
+                # Move SL to breakeven + a 0.12% buffer to cover round-trip exchange fees and slippage
+                trade.sl = trade.entry_price * (1 + (1 if side == "long" else -1) * 0.0012)
+                db_upsert_trade(trade)
+                log.info(f"TP1 hit {trade.symbol} pnl={pnl:.4f} | SL moved to BE")
 
         # TP2 — close tp2_qty share of remaining (tp2 + tp3)
         if trade.status == "open" and trade.tp1_hit and not trade.tp2_hit and hit_tp(trade.tp2):
@@ -1398,9 +1415,9 @@ REGIME_PARAMS = {
     },
     "MEAN_REVERSION": {
         "trade_direction": "BOTH",
-        "tp1_pct": 1.1, "tp2_pct": 2.2, "tp3_pct": 3.3,
-        "sl_pct": 1.1, "tp1_qty": 85.0, "tp2_qty": 10.0, "tp3_qty": 5.0,
-        "description": "Moderate volatility — 1:1 RR at TP1, wider SL, mean-reversion entries.",
+        "tp1_pct": 0.8, "tp2_pct": 1.6, "tp3_pct": 2.4,
+        "sl_pct": 0.8, "tp1_qty": 100.0, "tp2_qty": 0.0, "tp3_qty": 0.0,
+        "description": "Moderate volatility — tight SL, conservative TP1 only (100% exit), quarter position size.",
         "fits": ["Mean reversion scalping", "Fading extremes"],
     },
     "HIGH_VOLATILITY": {
