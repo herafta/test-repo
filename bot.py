@@ -1199,8 +1199,8 @@ class TradeManager:
         if sl <= 0.0 or (side == "long" and sl >= price) or (side == "short" and sl <= price) or sl_dist_pct < 0.6:
             sl = price * (1 - mult * self.config.sl_pct / 100)
             
-        # Enforce a maximum SL distance to prevent TPs from being pushed into unrealistic territories
-        max_dist = price * (self.config.sl_pct * 2.5 / 100)
+        # Widen the max distance allowance to survive altcoin wicks
+        max_dist = price * (self.config.sl_pct * 4.0 / 100)
         risk_dist = min(abs(price - sl), max_dist)
         
         # Recalculate SL based on clamped risk distance to align with TPs
@@ -1209,13 +1209,12 @@ class TradeManager:
         # Ensure the final executed stop loss is exactly matching our core risk distance
         sl = price - (mult * risk_dist)
 
-        # Scale down the stop loss distance relative to TP1 have a tighter risk profile
-        # For example, multiplying risk_dist by 0.75 for the SL compresses risk to 75% of the TP1 distance
-        sl_tightened_dist = risk_dist * 0.75
+        # Do not artificially tighten the stop loss. Let it breathe to the SMA structure.
+        sl_tightened_dist = risk_dist 
         
-        # Tighten risk parameters for Mean Reversion: move SL closer to entry
+        # Only tighten slightly in mean reversion where we expect quick bounces
         if regime == "MEAN_REVERSION":
-            sl_tightened_dist = risk_dist * 0.40  # Considerably tighter stop to cut worst losses
+            sl_tightened_dist = risk_dist * 0.70  
             
         sl = price - (mult * sl_tightened_dist)
 
