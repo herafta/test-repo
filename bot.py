@@ -1479,7 +1479,8 @@ class SaiyanBot:
             "Dedup/Open": 0,
             "RSI Filter": 0,
             "EMA Filter": 0,
-            "Direction": 0
+            "Direction": 0,
+            "Regime Filter": 0
         }
 
     def _refresh_active_symbols(self):
@@ -1642,6 +1643,11 @@ class SaiyanBot:
 
     def _process_symbol(self, symbol: str, direction: str):
         if not self.trade_manager.can_open(symbol):
+            return
+
+        # Block trades in SIDEWAYS and MEAN_REVERSION regimes
+        if self.regime in ("SIDEWAYS", "MEAN_REVERSION"):
+            self.rejection_counters["Regime Filter"] += 1
             return
 
         # Cooldown gate — prevents re-entering a churning pair
